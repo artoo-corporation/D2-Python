@@ -1,0 +1,78 @@
+[project]
+name = "d2-sdk"
+version = "1.0.0"
+description = "The D2 Python SDK for RBAC on LLM Tools and other functionality"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "BUSL-1.1"
+license-files = ["LICENSE", "NOTICE", "NOTICE.header", "NOTICE.third_party"]
+authors = [
+    { name = "David", email = "david@artoo.love" },
+    { name = "Daniel", email = "daniel@artoo.love" }
+]
+classifiers = [
+    # maturity
+    "Development Status :: 5 - Production/Stable",
+
+    # audience
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+
+    # OS / interpreter
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+
+    # relevant topics
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+
+    # typing discipline (optional but nice for users)
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx",
+    "anyio",
+    "PyJWT[crypto]",
+    "opentelemetry-api",
+    "PyNaCl",
+]
+
+[project.urls]
+Homepage = "https://artoo.love/"
+Repository = "https://github.com/artoo-corporation/D2-Python"
+"Bug Tracker" = "https://github.com/artoo-corporation/D2-Python/issues"
+Documentation = "https://www.artoo.love/documentation/quick-start"
+Changelog = "https://github.com/artoo-corporation/D2-Python/releases"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.20.0",
+    "pytest-httpserver>=1.0.0",
+    "pip-tools>=7.0.0",
+]
+local = ["watchdog"]
+cli = ["PyYAML"]
+
+# Meta-extra for convenience: install everything (local + cli)
+all = [
+    "watchdog",
+    "PyYAML",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[project.scripts]
+d2 = "d2.__main__:main" 
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta" 
+
+[tool.setuptools.package-data]
+"d2" = ["py.typed"] 

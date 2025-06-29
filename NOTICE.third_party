@@ -1,0 +1,56 @@
+---
+Package: anyio
+Version: 4.0.0
+License: MIT
+Copyright © 2018 Alex Grönholm
+
+---
+Package: Deprecated
+Version: 1.2.18
+License: MIT
+Copyright © 2017 Laurent LAPORTE
+
+---
+Package: httpx
+Version: 0.25.2
+License: BSD-3-Clause
+Copyright © 2019 Encode OSS Ltd
+
+---
+Package: MarkupSafe
+Version: 3.0.2
+License: BSD-3-Clause
+Copyright © 2010 Pallets
+
+---
+Package: opentelemetry-api
+Version: 1.15.0
+License: Apache-2.0
+Copyright © The OpenTelemetry Authors
+
+---
+Package: PyJWT
+Version: 2.8.0
+License: MIT
+Copyright © 2015-2022 José Padilla
+
+---
+Package: PyYAML
+Version: 6.0.2
+License: MIT
+Copyright © 2006-2021 The PyYAML Authors
+
+---
+Package: Pygments
+Version: 2.19.2
+License: BSD-2-Clause
+Copyright © 2006-2022 The Pygments Team
+
+---
+Package: watchdog
+Version: 3.0.0
+License: Apache-2.0
+Copyright © 2012-2025 The Watchdog Authors
+
+
+
