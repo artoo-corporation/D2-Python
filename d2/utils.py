@@ -15,7 +15,7 @@ JITTER_FACTOR = 0.1
 MAX_BACKOFF_FACTOR = 8
 HTTP_TIMEOUT_SECONDS = 15
 
-DEFAULT_API_URL = os.getenv("D2_API_URL", "https://d2.artoo.love")
+DEFAULT_API_URL = os.getenv("D2_API_URL", "https://api.d2.artoo.love")
 
 # ---------------------------------------------------------------------------
 # Colored logging helper (ANSI) – used by CLI and can be enabled by users.
