@@ -58,6 +58,56 @@ policies:
     permissions: ["*"]
 ```
 
+### 3.1  Add guardrails with input/output policies
+
+Want a quick safety net without touching your code? Drop the rules into policy and D2 enforces them for you.
+
+```yaml
+- role: analyst
+  permissions:
+    - tool: reports.generate
+      allow: true
+      conditions:
+        input:
+          table: {in: [analytics, dashboards]}
+          row_limit: {max: 1000}
+```
+
+```python
+@d2_guard("reports.generate")
+def generate(table: str, row_limit: int):
+    ...
+```
+
+With the policy in place, D2 blocks calls that wander off the guardrails and logs `reason="input_validation"` so you know why.
+
+Need to clean the response on the way out?
+
+```yaml
+- role: support
+  permissions:
+    - tool: crm.lookup_customer
+      allow: true
+      conditions:
+        output:
+          ssn: {action: filter}
+          salary: {max: 100000, action: redact}
+          notes: {matches: "(?i)secret", action: deny}
+```
+
+```python
+@d2_guard("crm.lookup_customer")
+def lookup_customer(customer_id: str):
+    ...
+```
+
+The decorator strips PII, masks values, and if anything still violates the policy D2 raises `PermissionDeniedError` with `reason="output_validation"`. Your `on_deny` handler runs if you configured one, and telemetry captures the same reason code for dashboards/alerts.
+
+Want to see it live? Run `python examples/guardrails_demo.py`—it boots with `examples/guardrails_policy.yaml`, denies bad inputs, and shows how responses get scrubbed automatically.
+
+### Nested guards
+- Guarded functions can call other guarded functions. Each layer re-validates inputs and output using the same user context, so inner responses are cleaned before outer logic sees them.
+
 ## 4  Initialise RBAC (one line)
 
 ```python
@@ -154,6 +204,7 @@ Cloud mode notes:
 - JWKS rotation is automatic. The server can signal refresh; SDK updates keys transparently.
 - Plan/app limits are surfaced clearly in CLI and SDK (`D2PlanLimitError` for 402; `quota_apps_exceeded` for 403).
  - Privacy: Any `user_id` you pass to `d2.set_user()` may be included as-is in cloud usage events. Hash/pseudonymize if needed.
+- Telemetry never breaks your app—if the exporter isn’t present, we silently no-op.
 
 ---
 Need more details?  Jump to the full `README.md` . 

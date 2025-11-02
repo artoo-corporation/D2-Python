@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional, Deque
 import httpx
 import uuid
 
-from .utils import DEFAULT_API_URL, JITTER_FACTOR
-from .validator import resolve_limits
+from ..utils import DEFAULT_API_URL, JITTER_FACTOR
+from ..validator import resolve_limits
 
 logger = logging.getLogger(__name__)
 

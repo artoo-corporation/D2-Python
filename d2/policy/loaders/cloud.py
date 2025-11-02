@@ -5,20 +5,20 @@
 from typing import Dict, Any, Optional, Callable
 import asyncio
 import logging
+import os
 import time
 import uuid
 
 import httpx
 from urllib.parse import urljoin
 
-from .exceptions import PolicyError
-from .exceptions import D2PlanLimitError  # new
-from .listener import PollingListener
-from .policy_loader import PolicyLoader
-from .telemetry import get_tracer
-from .validator import resolve_limits
-from .cache import CacheManager
-import os
+from .base import PolicyLoader
+from ...cache import CacheManager
+from ...exceptions import PolicyError, D2PlanLimitError
+from ...listener import PollingListener
+from ...telemetry import get_tracer
+from ...validator import resolve_limits
+from ...policy.files import require_app_name
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
@@ -47,13 +47,11 @@ class CloudPolicyLoader(PolicyLoader):
         
         # Initialize cache manager with app_name from policy file
         if not self._cache:
-            from .utils import require_app_name
             try:
                 app_name = require_app_name()
                 logger.debug("Successfully read app_name from policy file: %s", app_name)
                 self._cache = CacheManager(self._api_token, app_name)
             except Exception as e:
-                # Fallback to generic name if policy file issues
                 logger.warning("Failed to read app_name from policy file, using 'default': %s", e)
                 self._cache = CacheManager(self._api_token, "default")
         

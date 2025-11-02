@@ -7,7 +7,7 @@ import pytest
 # Ensure env var flush interval small for tests
 os.environ["D2_USAGE_FLUSH_SEC"] = "1"
 
-from d2.usage_reporter import UsageReporter
+from d2.telemetry import UsageReporter
 
 
 def test_emit_event_and_caps(monkeypatch):
@@ -60,7 +60,7 @@ def test_shutdown_hook_force_flush(monkeypatch):
 def test_usage_metrics_isolation():
     import pathlib, re
 
-    telemetry_path = pathlib.Path(__file__).resolve().parents[1] / "d2" / "telemetry.py"
+    telemetry_path = pathlib.Path(__file__).resolve().parents[2] / "d2" / "telemetry.py"
     content = telemetry_path.read_text()
     # no reference to UsageReporter (case-sensitive search)
     assert "UsageReporter" not in content, "telemetry.py must not reference UsageReporter"

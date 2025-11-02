@@ -13,9 +13,10 @@
 D2 lets you put a fast, default‑deny RBAC guard in front of any Python function your LLM (or app) can call.
 
 - Secure by default: if a tool isn’t explicitly allowed, it’s blocked
-- Seamless DX: one decorator + a per‑request user context
-- Local mode for dev; Cloud mode adds signed bundles, polling, and usage analytics
-- Telemetry out of the box; no crashes on exporter failures
+- Small surface area: one decorator, a per-request user context, and you’re good to go
+- Declarative input/output guardrails: describe argument constraints and redaction rules in policy; D2 enforces them around your tool automatically
+- Telemetry with guardrails: metrics + usage events stream out automatically, and exporter hiccups never crash your app
+- Local files for dev, signed bundles for prod: flip on Cloud mode for polling, JWKS rotation, and hosted analytics
 
 —
 
@@ -144,6 +145,154 @@ def handle_request(req):
 
 ---
 
+## ✅ Policy-driven input & output guardrails (new in 1.1)
+
+Two questions matter every time a tool is called:
+
+1. **Did the caller send us something we’re willing to run?**
+2. **Are we comfortable with the data we send back?**
+
+D2 now lets you answer both straight from the policy file. No helper code, no wrappers, just rules.
+
+### Input rules (keep bad calls out)
+
+```yaml
+policies:
+  - role: analyst
+    permissions:
+      - tool: reports.generate
+        allow: true
+        conditions:
+          input:
+            table: {in: [analytics, dashboards]}
+            row_limit: {min: 1, max: 1000}
+            format: {matches: "^[a-z_]+$"}
+```
+
+And the guarded function might look like:
+
+```python
+@d2_guard("reports.generate")
+def generate(table: str, row_limit: int):
+    ...
+```
+
+D2 binds the call, checks each rule, and blocks execution if anything falls outside the policy. Violations raise `PermissionDeniedError` (or trigger your `on_deny` handler) and telemetry records `reason="input_validation"` for easy tracing.
+
+Operators cover the basics—equals/not-equals, allow/deny lists, numeric bounds, string prefix/suffix/contains, regex checks, length checks, explicit type checks. Because policies live outside the codebase, security can tune them without waiting for a deploy.
+
+### Output rules (validate and sanitize responses)
+
+D2 provides two complementary capabilities for output processing:
+
+#### 1. Output Validation (constraint checking)
+
+Validates return values against declarative constraints—just like input validation, but for outputs. If validation fails, the entire response is denied.
+
+```yaml
+policies:
+  - role: analyst
+    permissions:
+      - tool: analytics.get_report
+        allow: true
+        conditions:
+          output:
+            status: {required: true, in: [success, error]}
+            row_count: {type: int, min: 0, max: 10000}
+            format: {type: string, in: [json, csv, xml]}
+```
+
+**Key characteristics:**
+- Uses constraint operators WITHOUT `action` keyword
+- Denies entire response if violated (no transformation)
+- Symmetric with input validation
+- Think: "Is this return value structurally valid?"
+
+#### 2. Output Sanitization (transformation)
+
+Transforms return values to remove or redact sensitive data using field actions. This happens after validation passes.
+
+```yaml
+policies:
+  - role: support
+    permissions:
+      - tool: crm.lookup_customer
+        allow: true
+        conditions:
+          output:
+            # Validation (pure constraints, no transformation)
+            status: {required: true, in: [found, not_found]}
+            
+            # Sanitization (field actions, transforms data)
+            ssn: {action: filter}                        # Remove field
+            salary: {max: 100000, action: redact}        # Redact if > 100k
+            notes: {matches: "(?i)secret", action: deny} # Deny if pattern found
+            items: {maxLength: 100, action: truncate}    # Trim to 100 items
+            
+            # Global sanitization rules
+            max_bytes: 65536
+            require_fields_absent: [internal_flag]
+```
+
+Paired with a tool such as:
+
+```python
+@d2_guard("crm.lookup_customer")
+def lookup_customer(customer_id: str):
+    ...
+```
+
+**Processing order:**
+1. **Validate**: Check constraints without `action` (deny if violated)
+2. **Sanitize**: Apply field actions (transform or deny)
+3. Return cleaned value to caller
+
+**Field-level actions:**
+
+- `action: filter` — drop the field entirely
+- `action: redact` — replace value with `[REDACTED]` (or pattern-substitute if `matches` specified)
+- `action: deny` — block entire response if field triggers
+- `action: truncate` — trim field value (requires `maxLength`)
+
+Actions can be **conditional** (only trigger on constraint violation):
+```yaml
+salary: {max: 100000, action: redact}  # Only redact if > 100k
+score: {type: int, max: 100, action: filter}  # Only remove if invalid or > 100
+```
+
+**Constraint operators (work on both input and output):**
+
+- `type`, `min`, `max`, `gt`, `lt` — numeric/type validation
+- `minLength`, `maxLength` — length checks
+- `in`, `not_in` — allow/deny lists
+- `matches`, `contains`, `startsWith`, `endsWith` — string pattern checks
+- `eq`, `ne`, `required` — equality/presence checks
+
+**Global sanitization rules:**
+
+- `deny_if_patterns` — block if sanitized output still matches forbidden patterns
+- `require_fields_absent` — block if forbidden fields exist anywhere
+- `max_bytes` — enforce size limit on serialized output
+
+**Key differences:**
+
+| Aspect | Validation | Sanitization |
+|--------|-----------|--------------|
+| **Keyword** | No `action` | Requires `action` |
+| **Effect** | Deny if violated | Transform (or deny if `action: deny`) |
+| **Value** | Never modified | Always transformed when triggered |
+| **Use case** | "Is this structurally valid?" | "Remove sensitive data" |
+
+Stack them however you like. If no rule fires, we return the original value untouched. If a validation or deny rule triggers, D2 raises `PermissionDeniedError` (or calls your `on_deny` handler) with `reason="output_validation"` or `reason="output_sanitization"` for easy auditing. Telemetry records the same reason codes for downstream monitoring.
+
+#### Nested guards
+
+- Guarded functions can safely call other guarded functions. Each layer re-runs input checks and output sanitation using the same user context, so inner responses are cleaned before outer guards inspect or return them.
+
+Run `python examples/guardrails_demo.py` to watch both guardrail types block bad inputs and sanitize outputs using the sample policy in `examples/guardrails_policy.yaml`.
+
+---
+
 ## 🧩 Generate a policy and iterate locally
 
 Create a local policy (no cloud token required):
@@ -233,25 +382,26 @@ Failure behavior
    - `402` → surfaced as `D2PlanLimitError` (e.g., tool or feature limit)
    - `403` with `detail: quota_apps_exceeded` → account has reached the maximum number of apps; upgrade or delete unused apps
 
-Telemetry note
-- “Auto-configured” means: if the OpenTelemetry SDK and the OTLP HTTP exporter are present, D2 turns on metrics automatically; otherwise it does nothing and your app continues normally (no crashes).
-- Where metrics go: to your OTLP collector (URL via `OTEL_EXPORTER_OTLP_ENDPOINT`).
-- Where usage events go: to D2 Cloud (when `D2_TOKEN` is set), for product analytics/quotas.
-- D2_TELEMETRY modes:
-  - `off`: no metrics, no usage events
-  - `metrics`: only OTLP metrics (no usage events)
-  - `usage`: only usage events to D2 Cloud (no OTLP metrics)
-  - `all` (default): both; metrics still no-op if exporter libs aren’t installed
+## 📊 Telemetry & analytics
 
-> Metrics API scopes: If you call any Cloud metrics endpoints (future feature), the token must include scope `metrics.read`. `admin` alone will not satisfy strict scope checks.
+D2 pushes useful telemetry without demanding extra wiring:
+
+- **Metrics** land in your OTLP collector (respecting `OTEL_EXPORTER_OTLP_ENDPOINT`). Latency, decision counts, JWKS rotation, polling health—it’s all there.
+- **Usage events** go to the D2 Cloud ingest endpoint whenever `D2_TOKEN` is set. Every event is tagged with tool id, policy etag, service name, and the exact denial reason if there was one.
+- **D2_TELEMETRY modes**
+  - `off` – nothing leaves the process
+  - `metrics` – OTLP only
+  - `usage` – cloud events only
+  - `all` (default) – both; metrics still no-op if the exporter libs aren’t installed
+- Exporter failures never bubble up—worst case we drop the event and keep your app running.
+
+> If/when metrics APIs arrive in the control plane, tokens will need the `metrics.read` scope alongside `admin`.
 
 ### Telemetry & privacy
-- Default: `D2_TELEMETRY=all` (metrics + usage). Set `D2_TELEMETRY=off` to disable everything.
-- Usage events are only sent in Cloud mode (`D2_TOKEN` set). Local mode never sends usage.
-- Metrics auto-init is safe: if your app already configured an OpenTelemetry provider, D2 will not override it.
-- If OTLP exporter libs are not installed, metrics are a no-op.
-- ANSI ColorFormatter used by the CLI is cosmetic; the library itself does not force colored logging.
-- User identifiers: Any `user_id` you pass to `d2.set_user()` may be included as-is in cloud usage events (e.g., `authz_decision`, `denied_reason`). Hash or pseudonymize if you don’t want to send real IDs.
+- Local mode is completely offline. Usage events only flow in Cloud mode.
+- Already configured an OpenTelemetry provider? D2 leaves it alone.
+- User identifiers you pass into `set_user()` appear as-is in denial events. Hash or pseudonymise if that matters for your compliance story.
+- ANSI colour in the CLI is just cosmetic; the library logs plain text.
 
 ---
 
@@ -376,6 +526,3 @@ pytest tests/test_decorator.py      # Decorator functionality tests
 5. **Verify examples work**: `python examples/local_mode_demo.py`
 
 ---
-
-## 📄 Licensing
-Source-available under Business Source License 1.1. Internal production use permitted. No managed/hosted competing service without a commercial license. Change Date: 2029-09-08 → Change License: LGPL-3.0-or-later. See LICENSE.

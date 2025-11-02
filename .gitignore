@@ -194,7 +194,9 @@ cython_debug/
 .cursorindexingignore
 
 # Markdown files
-TODO.md
+*.md
+!quickstart.md
+!readme.md
 
 # Miscellaneous
 .DS_Store

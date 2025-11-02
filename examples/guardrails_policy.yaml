@@ -1,0 +1,96 @@
+# Guardrails demo policy for local-only examples.
+# Demonstrates the separation between:
+# 1. Input validation (constraint checking on arguments)
+# 2. Output validation (constraint checking on return values)
+# 3. Output sanitization (transformation via field actions)
+
+metadata:
+  name: guardrails-demo
+  description: Demonstrates input validation, output validation, and output sanitization
+  expires: "2025-11-05T00:00:00+00:00"
+
+policies:
+  - role: analyst
+    permissions:
+      # INPUT VALIDATION: Check arguments before execution
+      - tool: analytics.fetch_report
+        allow: true
+        conditions:
+          input:
+            table: {in: [sales, marketing]}    # Allow-list
+            row_limit: {min: 1, max: 1000}     # Numeric range
+            format: {matches: "^[a-z_]+$"}     # Pattern validation
+
+      - tool: analytics.create_segment
+        allow: true
+        conditions:
+          input:
+            segment_name: {minLength: 3, maxLength: 32}
+            priority: {type: int, min: 1, max: 5}
+            region: {in: [us, eu, apac]}
+            channel: {not_in: [sms]}
+            tags: {type: list, minLength: 1, maxLength: 5}
+
+      - tool: analytics.schedule_report
+        allow: true
+        conditions:
+          input:
+            cadence: {in: [daily, weekly, monthly]}
+            timezone: {matches: "^[A-Za-z_]+/[A-Za-z_]+$"}
+            day_of_month: {type: int, min: 1, max: 28}
+            window_minutes: {type: int, gt: 0, lt: 1440}
+            include_pii: {eq: false}
+
+      - tool: analytics.update_thresholds
+        allow: true
+        conditions:
+          input:
+            metric: {not_in: [unsupported]}
+            lower: {type: float, min: 0}
+            upper: {type: float, max: 1}
+            notes: {not_contains: TODO}
+
+      # OUTPUT SANITIZATION: Transform sensitive data
+      - tool: analytics.export
+        allow: true
+        conditions:
+          output:
+            # Sanitization actions (requires 'action' keyword)
+            ssn: {action: filter}                         # Remove field entirely
+            salary: {action: filter}                      # Remove field entirely
+            notes: {matches: "(?i)secret", action: redact}  # Redact pattern matches
+            records: {maxLength: 3, action: truncate}     # Limit array length
+
+      # OUTPUT DENIAL RULES: Hard stop conditions
+      - tool: analytics.export_flags
+        allow: true
+        conditions:
+          output:
+            # Global rules (not field-specific)
+            require_fields_absent: [pii_flag]  # Deny if field exists
+            max_bytes: 128                     # Deny if too large
+
+      - tool: analytics.export_bulk
+        allow: true
+        conditions:
+          output:
+            max_bytes: 128
+
+      - tool: analytics.export_tokens
+        allow: true
+        conditions:
+          output:
+            tokens: {action: deny}
+
+      - tool: analytics.export_logs
+        allow: true
+        conditions:
+          output:
+            deny_if_patterns:
+              - "(?i)secret"
+              - "(?i)password"
+
+  - role: admin
+    permissions: ["*"]
+
+

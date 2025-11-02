@@ -63,7 +63,7 @@ def resolve_limits(token: Optional[str]) -> dict:
         resp = httpx.get(
             f"{DEFAULT_API_URL.rstrip('/')}/v1/accounts/me",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=3.0,
+            timeout=10.0,
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -176,8 +176,17 @@ def _check_tool_count(bundle: Dict[str, Any], limit: int) -> int:
 
     for policy in bundle.get("policies", []):
         for perm in policy.get("permissions", []):
-            if perm != "*":
-                defined_tools.add(perm)
+            if perm == "*":
+                continue
+
+            if isinstance(perm, dict):
+                tool_id = perm.get("tool") or perm.get("id")
+                if not tool_id:
+                    continue
+                defined_tools.add(tool_id)
+                continue
+
+            defined_tools.add(str(perm))
 
     tool_count = len(defined_tools)
 

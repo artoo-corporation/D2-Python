@@ -2,7 +2,7 @@
 # Licensed under the Business Source License 1.1 (see LICENSE).
 # Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
 
-# d2/policy.py
+# d2/policy/manager.py
 
 import asyncio
 import base64
@@ -13,8 +13,7 @@ import os
 import threading
 import warnings
 import time
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Set, List
+from typing import Dict, Any, Optional, List, Mapping
 from datetime import datetime, timezone, timedelta
 
 import anyio
@@ -23,13 +22,14 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from opentelemetry.trace import Status, StatusCode
 
-from .context import get_user_context, get_user_roles
-from .exceptions import (
+from ..context import get_user_context, get_user_roles
+from ..exceptions import (
     ConfigurationError,
     InvalidSignatureError,
     ContextLeakWarning,
+    D2NoContextError,
 )
-from .telemetry import (
+from ..telemetry import (
     get_tracer,
     authz_decision_total,
     authz_decision_latency_ms,
@@ -40,65 +40,14 @@ from .telemetry import (
     policy_load_latency_ms,
     jwks_fetch_latency_ms,
 )
-# local imports
-from .policy_loader import PolicyLoader
-from .policy_cloud import CloudPolicyLoader
-from .policy_file import FilePolicyLoader
-from .jwks_cache import JWKSCache
-# --- Usage telemetry helper
-from .usage_reporter import UsageReporter
-from .utils import get_telemetry_mode, TelemetryMode, DEFAULT_API_URL
+from .loaders import PolicyLoader, CloudPolicyLoader, FilePolicyLoader
+from ..jwks_cache import JWKSCache
+from ..telemetry import UsageReporter
+from ..utils import get_telemetry_mode, TelemetryMode, DEFAULT_API_URL
+from .bundle import PolicyBundle
 
 tracer = get_tracer(__name__)
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class PolicyBundle:
-    """A structured representation of the policy bundle."""
-
-    raw_bundle: Dict[str, Any]
-    mode: str  # 'file' or 'cloud'
-    loaded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    signature: Optional[str] = None
-    etag: Optional[str] = None  # For analytics and caching
-    tool_to_roles: Dict[str, Set[str]] = field(default_factory=dict, repr=False)
-
-    def __post_init__(self):
-        """Parse the raw bundle into a more efficient, inverted structure (tool -> roles)."""
-        # Handle both flat structure (local files) and nested structure (cloud bundles)
-        if "policy" in self.raw_bundle:
-            # Cloud mode: policy content is nested under "policy" field
-            policy_content = self.raw_bundle["policy"]
-        else:
-            # Local mode: policy content is directly in raw_bundle
-            policy_content = self.raw_bundle
-            
-        policies = policy_content.get("policies", [])
-        logger.debug("Processing %d policies from %s mode", len(policies), self.mode)
-        
-        for policy in policies:
-            role = policy.get("role")
-            if not role:
-                logger.debug("Skipping policy without role: %s", policy)
-                continue
-
-            permissions = policy.get("permissions", [])
-            logger.debug("Processing role '%s' with %d permissions: %s", role, len(permissions), permissions)
-            
-            for permission in permissions:
-                # If the permission is not yet in our map, initialize it with a set
-                if permission not in self.tool_to_roles:
-                    self.tool_to_roles[permission] = set()
-                # Add the current role to the set of roles allowed for this permission
-                self.tool_to_roles[permission].add(role)
-                
-        logger.debug("Final tool_to_roles mapping: %s", dict(self.tool_to_roles))
-
-    @property
-    def all_known_tools(self) -> Set[str]:
-        """Returns all tools defined in the policy."""
-        return set(self.tool_to_roles.keys())
 
 
 class PolicyManager:
@@ -440,7 +389,6 @@ class PolicyManager:
 
             # Enforce context requirement - no anonymous access allowed
             if user_context is None or user_context.user_id is None:
-                from .exceptions import D2NoContextError
                 context_leak_total.add(1)
                 if self._usage_reporter:
                     self._usage_reporter.track_event(
@@ -507,6 +455,40 @@ class PolicyManager:
                     )
             
             return is_allowed
+
+    async def get_tool_conditions(self, tool_id: str) -> Optional[Any]:
+        """Retrieve declarative conditions for a tool scoped to the current user."""
+
+        await self._init_complete.wait()
+        bundle = self._get_bundle()
+        user_context = get_user_context()
+
+        if user_context is None:
+            return None
+
+        user_roles = set(user_context.roles or [])
+        if not user_roles or "*" in user_roles:
+            # No roles or super-admin role bypasses additional conditions.
+            return None
+
+        applicable: List[Any] = []
+
+        def _collect_conditions(tool_identifier: str):
+            for entry in bundle.tool_conditions.get(tool_identifier, []):
+                role = entry.get("role")
+                if role in user_roles:
+                    applicable.append(entry.get("conditions"))
+
+        _collect_conditions(tool_id)
+        _collect_conditions("*")
+
+        if not applicable:
+            return None
+
+        if len(applicable) == 1:
+            return applicable[0]
+
+        return applicable
 
     async def is_tool_in_policy_async(self, tool_id: str) -> bool:
         """Async: Checks if a tool ID is defined in the policy at all."""

@@ -19,7 +19,7 @@ from collections import deque
 
 import pytest
 
-from d2.usage_reporter import UsageReporter
+from d2.telemetry import UsageReporter
 
 
 @pytest.mark.anyio
@@ -86,7 +86,7 @@ async def test_buffer_overflow_drops_oldest_events_first(monkeypatch, httpx_ok):
     This prevents memory exhaustion in long-running applications that
     generate many telemetry events.
     """
-    monkeypatch.setattr("d2.usage_reporter.MAX_BUFFER_SIZE", 2, raising=False)
+    monkeypatch.setattr("d2.telemetry.usage.MAX_BUFFER_SIZE", 2, raising=False)
 
     reporter = UsageReporter(api_token="x")  # uses patched MAX_BUFFER_SIZE
 

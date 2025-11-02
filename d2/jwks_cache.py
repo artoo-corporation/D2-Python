@@ -64,7 +64,7 @@ class JWKSCache:
                 
                 # Skip expired keys
                 if expires_at <= now:
-                    cache_file.unlink(missing_ok=True)
+                    self._try_unlink(cache_file)
                     continue
                     
                 jwk_dict = data.get("jwk")
@@ -74,7 +74,7 @@ class JWKSCache:
                     logger.debug("Loaded cached JWK kid=%s from disk", kid)
             except Exception:
                 logger.debug("Failed to load cached JWK from %s", cache_file)
-                cache_file.unlink(missing_ok=True)
+                self._try_unlink(cache_file)
 
     def _save_to_disk(self, kid: str, jwk_dict: dict, expires_at: float) -> None:
         """Save key to disk cache."""
@@ -109,7 +109,7 @@ class JWKSCache:
         while len(self._cache) >= self._max_keys:
             kid, _ = self._cache.popitem(last=False)  # Remove oldest
             cache_file = self._cache_dir / f"{kid}.json"
-            cache_file.unlink(missing_ok=True)
+            self._try_unlink(cache_file)
             logger.debug("Evicted LRU JWK kid=%s", kid)
 
     async def _refresh(self) -> None:
@@ -132,7 +132,7 @@ class JWKSCache:
             
             # Clean up old disk cache files
             for cache_file in self._cache_dir.glob("*.json"):
-                cache_file.unlink(missing_ok=True)
+                self._try_unlink(cache_file)
                 
             for jwk_dict in jwks.get("keys", []):
                 kid = jwk_dict.get("kid")
@@ -158,6 +158,16 @@ class JWKSCache:
         finally:
             # Always clear the refresh in progress flag
             self._refresh_in_progress = False
+
+    def _try_unlink(self, path: Path) -> None:
+        """Attempt to remove a cache file while ignoring permission issues."""
+
+        try:
+            path.unlink(missing_ok=True)
+        except PermissionError:
+            logger.debug("Insufficient permissions to remove cache file %s", path)
+        except OSError:
+            logger.debug("Failed to remove cache file %s", path)
 
     async def get_key(self, kid: str):
         """Legacy method for backward compatibility - delegates to smart refresh."""

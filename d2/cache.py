@@ -17,6 +17,7 @@ Key features:
 from __future__ import annotations
 
 import hashlib
+import logging
 import json
 import os
 import shutil
@@ -31,6 +32,9 @@ __all__ = [
     "CacheManager",
     "gc_old_caches",
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_context_key(token: str) -> str:
@@ -131,20 +135,25 @@ class CacheManager:
 
     def _atomic_write(self, path: Path, content: str) -> None:
         """Write content atomically using temp file + rename."""
-        with tempfile.NamedTemporaryFile(
-            mode='w', 
-            dir=str(path.parent),
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False
-        ) as tmp:
-            tmp.write(content)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp_path = tmp.name
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                tmp.write(content)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp_path = tmp.name
 
-        # Atomic rename
-        Path(tmp_path).replace(path)
+            # Atomic rename
+            Path(tmp_path).replace(path)
+        except PermissionError:
+            logger.debug("Skipping cache write for %s due to permission error", path)
+        except OSError as exc:
+            logger.debug("Failed to write cache file %s: %s", path, exc)
 
 
 def gc_old_caches(max_age_days: int = 30, dry_run: bool = False) -> Dict[str, Any]:

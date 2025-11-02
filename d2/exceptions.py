@@ -12,14 +12,24 @@ class D2Error(Exception):
 
 class PermissionDeniedError(D2Error):
     """Raised when a tool call is denied by policy."""
-    def __init__(self, tool_id: str, user_id: Optional[str], roles: Optional[set[str]]):
+
+    def __init__(
+        self,
+        tool_id: str,
+        user_id: Optional[str],
+        roles: Optional[set[str]],
+        *,
+        reason: Optional[str] = None,
+    ):
         self.tool_id = tool_id
         self.user_id = user_id
         self.roles = roles
-        message = (
+        self.reason = reason
+        base = (
             f"Permission denied for user '{user_id}' (roles: {list(roles) if roles else []}) "
             f"to access tool '{tool_id}'."
         )
+        message = base if not reason else f"{base} {reason}"
         super().__init__(message)
 
 

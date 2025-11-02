@@ -3,11 +3,12 @@
 # Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
 
 import asyncio
+import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
 
 import anyio
 
@@ -17,13 +18,11 @@ try:
 except ImportError:  # pragma: no cover – handled later
     yaml = None
 
-import json
-
-from .policy_loader import PolicyLoader
-from .exceptions import ConfigurationError
-from .telemetry import get_tracer, policy_file_reload_total
-from .telemetry import local_tool_count
-from .validator import validate_bundle
+from .base import PolicyLoader
+from ...exceptions import ConfigurationError
+from ...telemetry import get_tracer, policy_file_reload_total
+from ...telemetry import local_tool_count
+from ...validator import validate_bundle
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)

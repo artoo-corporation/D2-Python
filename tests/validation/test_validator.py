@@ -42,6 +42,39 @@ def create_test_bundle(*, expires: str, tools: list[str]):
     }
 
 
+def create_bundle_with_conditionals(*, expires: str):
+    return {
+        "metadata": {"expires": expires},
+        "policies": [
+            {
+                "role": "analyst",
+                "permissions": [
+                    "legacy.tool",
+                    {
+                        "tool": "reports.generate",
+                        "allow": True,
+                        "conditions": {
+                            "input": {
+                                "table": {"in": ["sales", "marketing"]}
+                            }
+                        },
+                    },
+                    {
+                        "tool": "analytics.export",
+                        "allow": True,
+                        "conditions": {
+                            "output": {
+                                "filter_fields": ["ssn"],
+                                "max_items": 5,
+                            }
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+
 def test_valid_bundle_passes_all_free_tier_checks():
     """
     GIVEN: A policy bundle that meets all free-tier requirements
@@ -129,3 +162,12 @@ def test_bundle_size_limit_prevents_resource_exhaustion():
     # Verify the error mentions size
     assert "size" in str(error.value).lower() or "large" in str(error.value).lower(), \
            "Error should mention size limit" 
+
+
+def test_tool_count_handles_permission_objects():
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    bundle = create_bundle_with_conditionals(expires=tomorrow)
+
+    tool_count = validate_local_bundle(bundle, raw_bundle_size=512)
+
+    assert tool_count == 3

@@ -18,15 +18,16 @@ import logging
 
 from .policy import get_policy_manager
 from .context import get_user_context
-from .telemetry import get_tracer
 from .telemetry import (
     authz_decision_total,
     authz_denied_reason_total,
     missing_policy_total,
     tool_invocation_total,
-    tool_exec_latency_ms,
     sync_in_async_denied_total,
+    get_tracer,
 )
+from .runtime import apply_output_filters, record_tool_metrics, validate_inputs
+from .telemetry.plan_limits import emit_plan_limit_warning
 
 # Sentinel object to detect if a parameter was provided by the user
 _sentinel = object()
@@ -102,47 +103,13 @@ def d2_guard(
         if effective_tool_id is None:
             effective_tool_id = f"{func.__module__}.{func.__qualname__}"
 
-        # ------------------------------------------------------------------
-        # Local helper: records per-tool invocation stats.
-        # ------------------------------------------------------------------
 
-        def _record_tool_metrics(start_ts: float, tool_id: str, status: str):
-            """Record latency histogram & total counter for a tool execution."""
-            duration_ms = (time.perf_counter() - start_ts) * 1000.0
-            tool_exec_latency_ms.record(duration_ms, {"tool_id": tool_id, "status": status})
-            tool_invocation_total.add(1, {"tool_id": tool_id, "status": status})
-
-            # UsageReporter (if enabled)
-            try:
-                manager = get_policy_manager(instance_name)
-                reporter = getattr(manager, "_usage_reporter", None)
-                if reporter:
-                    # Get policy context for analytics
-                    policy_etag = None
-                    token_kid = None
-                    service_name = "unknown"
-                    
-                    if hasattr(manager, "_policy_bundle") and manager._policy_bundle:
-                        # Get ETag from policy bundle metadata
-                        policy_etag = getattr(manager._policy_bundle, "etag", None)
-                        # Get service name from policy bundle metadata.name
-                        metadata = manager._policy_bundle.raw_bundle.get("metadata", {})
-                        service_name = metadata.get("name", "unknown")
-                    
-                    reporter.track_event(
-                        "tool_invoked",
-                        {
-                            "tool_id": tool_id,
-                            "decision": status,
-                            "resource": tool_id,
-                            "latency_ms": duration_ms,
-                        },
-                        policy_etag=policy_etag,
-                        service_name=service_name
-                    )
-            except Exception:
-                # Hard-fail avoidance: telemetry must not break the tool.
-                pass
+        signature = inspect.signature(func)
+        allowed_params = tuple(signature.parameters.keys())
+        has_var_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        )
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
@@ -184,8 +151,9 @@ def d2_guard(
                         is_allowed = await manager.check_async(effective_tool_id)
                         span.set_attribute("d2.is_allowed", is_allowed)
 
+                        user_context = get_user_context()
+
                         if not is_allowed:
-                            user_context = get_user_context()
                             error = PermissionDeniedError(
                                 tool_id=effective_tool_id,
                                 user_id=user_context.user_id if user_context else "unknown",
@@ -194,11 +162,21 @@ def d2_guard(
                             # Record a denied tool invocation outcome for observability
                             tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                             return await _handle_permission_denied(error)
+
+                        bound = inspect.signature(func).bind(*args, **kwargs)
+                        bound.apply_defaults()
+                        validation_error = await validate_inputs(
+                            manager,
+                            effective_tool_id,
+                            bound.arguments,
+                            user_context,
+                            allowed_params=allowed_params,
+                            has_var_kwargs=has_var_kwargs,
+                        )
+                        if validation_error is not None:
+                            return await _handle_permission_denied(validation_error)
                 except D2PlanLimitError:
-                    _log = logging.getLogger("d2.plan_limit")
-                    _log.error(
-                        "⛔  Plan limit reached.  Upgrade to Essentials ($49/mo) or Pro ($199/mo) at https://artoo.love/"
-                    )
+                    emit_plan_limit_warning()
                     raise
 
                 # If permission is granted, execute the tool and record metrics
@@ -206,16 +184,40 @@ def d2_guard(
                 try:
                     # Execute the sync tool inline in the current thread
                     result = func(*args, **kwargs)
-                    _record_tool_metrics(exec_start, effective_tool_id, "success")
+                    try:
+                        result = await apply_output_filters(
+                            manager,
+                            effective_tool_id,
+                            result,
+                            user_context=user_context,
+                        )
+                    except PermissionDeniedError as error:
+                        tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
+                        try:
+                            authz_denied_reason_total.add(
+                                1, {"reason": "output_validation", "mode": manager.mode}
+                            )
+                            reporter = getattr(manager, "_usage_reporter", None)
+                            if reporter:
+                                reporter.track_event(
+                                    "denied_reason",
+                                    {"tool_id": effective_tool_id, "reason": "output_validation"},
+                                )
+                        except Exception:
+                            pass
+                        record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                        return await _handle_permission_denied(error)
+
+                    record_tool_metrics(manager, effective_tool_id, "success", exec_start)
                     return result
                 except D2PlanLimitError as e:
-                    _log = logging.getLogger("d2.plan_limit")
-                    _log.error(
-                        "⛔  Plan limit reached.  Upgrade to Essentials ($49/mo) or Pro ($199/mo) at https://artoo.love/"
-                    )
+                    emit_plan_limit_warning()
+                    raise
+                except PermissionDeniedError as error:
+                    record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
                     raise
                 except Exception:
-                    _record_tool_metrics(exec_start, effective_tool_id, "error")
+                    record_tool_metrics(manager, effective_tool_id, "error", exec_start)
                     raise
 
             # Detect if an event loop is already running in this thread.
@@ -308,8 +310,9 @@ def d2_guard(
                     is_allowed = await manager.check_async(effective_tool_id)
                     span.set_attribute("d2.is_allowed", is_allowed)
 
+                    user_context = get_user_context()
+
                     if not is_allowed:
-                        user_context = get_user_context()
                         error = PermissionDeniedError(
                             tool_id=effective_tool_id,
                             user_id=user_context.user_id if user_context else "unknown",
@@ -318,10 +321,25 @@ def d2_guard(
                         # Record a denied tool invocation outcome for observability
                         tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                         return await _handle_permission_denied(error)
+
+                    bound = inspect.signature(func).bind(*args, **kwargs)
+                    bound.apply_defaults()
+                    validation_error = await validate_inputs(
+                        manager,
+                        effective_tool_id,
+                        bound.arguments,
+                        user_context,
+                        allowed_params=allowed_params,
+                        has_var_kwargs=has_var_kwargs,
+                    )
+                    if validation_error is not None:
+                        return await _handle_permission_denied(validation_error)
             except D2PlanLimitError:
-                _log = logging.getLogger("d2.plan_limit")
-                _log.error(
-                    "⛔  Plan limit reached.  Upgrade to Essentials ($49/mo) or Pro ($199/mo) at https://console.artoo.com/upgrade — 14-day trial auto-expires."
+                emit_plan_limit_warning(
+                    message=(
+                        "⛔  Plan limit reached.  Upgrade to Essentials ($49/mo) or Pro ($199/mo) at "
+                        "https://console.artoo.com/upgrade — 14-day trial auto-expires."
+                    )
                 )
                 raise
 
@@ -329,16 +347,45 @@ def d2_guard(
             exec_start = time.perf_counter()
             try:
                 result = await func(*args, **kwargs)
-                _record_tool_metrics(exec_start, effective_tool_id, "success")
+                try:
+                    result = await apply_output_filters(
+                        manager,
+                        effective_tool_id,
+                        result,
+                        user_context=user_context,
+                    )
+                except PermissionDeniedError as error:
+                    tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
+                    try:
+                        authz_denied_reason_total.add(
+                            1, {"reason": "output_validation", "mode": manager.mode}
+                        )
+                        reporter = getattr(manager, "_usage_reporter", None)
+                        if reporter:
+                            reporter.track_event(
+                                "denied_reason",
+                                {"tool_id": effective_tool_id, "reason": "output_validation"},
+                            )
+                    except Exception:
+                        pass
+                    record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                    return await _handle_permission_denied(error)
+
+                record_tool_metrics(manager, effective_tool_id, "success", exec_start)
                 return result
             except D2PlanLimitError:
-                _log = logging.getLogger("d2.plan_limit")
-                _log.error(
-                    "⛔  Plan limit reached.  Upgrade to Essentials ($49/mo) or Pro ($199/mo) at https://artoo.love/ — 14-day trial auto-expires."
+                emit_plan_limit_warning(
+                    message=(
+                        "⛔  Plan limit reached.  Upgrade to Essentials ($49/mo) or Pro ($199/mo) at "
+                        "https://artoo.love/ — 14-day trial auto-expires."
+                    )
                 )
                 raise
+            except PermissionDeniedError as error:
+                record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                raise
             except Exception:
-                _record_tool_metrics(exec_start, effective_tool_id, "error")
+                record_tool_metrics(manager, effective_tool_id, "error", exec_start)
                 raise
 
         # ------------------------------------------------------------------

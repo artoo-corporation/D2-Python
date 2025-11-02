@@ -12,7 +12,7 @@ import uuid
 from typing import Awaitable, Callable, Optional
 
 # Usage telemetry helper
-from .usage_reporter import UsageReporter
+from .telemetry import UsageReporter
 
 import httpx
 from opentelemetry.trace import Status, StatusCode
