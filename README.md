@@ -4,6 +4,8 @@
 
 # D2 SDK
 
+<h1>Check us out at https://artoo.love</h1>
+
 ### Deterministic Function-Level Guardrails for AI Agents
 
 **Control what your AI can do—one function at a time.**
