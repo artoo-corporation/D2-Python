@@ -450,6 +450,72 @@ def run_output_guardrail_examples() -> None:
 
 
 
+def explain_policy_validation() -> None:
+    """Explain how D2 validates policies at load time."""
+    print("\n" + "=" * 70)
+    print("POLICY VALIDATION: Catching Typos Before They Cause Problems")
+    print("=" * 70)
+    print("\nBefore running the demos, let's understand how D2 prevents silent failures.")
+    print("\nD2 performs strict validation when loading policies:")
+    print("  1. All operators are checked against a known whitelist")
+    print("  2. All regex patterns are compiled and validated")
+    print("  3. Unknown operators or bad regex → ConfigurationError")
+    print("  4. This happens at startup, not during customer requests")
+    
+    print("\nCommon typos D2 catches:")
+    print("  ❌ minimum/maximum  →  ✅ Use min/max")
+    print("  ❌ minlength        →  ✅ Use minLength (capital L)")
+    print("  ❌ maxlength        →  ✅ Use maxLength (capital L)")
+    print("  ❌ Type/Required    →  ✅ Use lowercase (type/required)")
+    
+    print("\nWhy this matters:")
+    print("  • Typos would be silently ignored without validation")
+    print("  • Your policy would have no effect (security hole)")
+    print("  • Catching at load time prevents production incidents")
+    
+    print("\nThis policy was validated on load:")
+    print(f"  Path: {POLICY_PATH}")
+    print("  Status: ✓ All operators recognized")
+    print("  Status: ✓ All regex patterns valid")
+    print("  Status: ✓ Ready to enforce")
+    
+    print("\nTo see validation in action, run:")
+    print("  python examples/policy_validation_demo.py")
+
+
+def explain_enhanced_telemetry() -> None:
+    """Explain the enhanced sanitization telemetry."""
+    print("\n" + "=" * 70)
+    print("ENHANCED TELEMETRY: Detailed Sanitization Tracking")
+    print("=" * 70)
+    print("\nD2 now tracks exactly what sanitization actions were applied:")
+    print("\nFor each sanitized response, telemetry includes:")
+    print("  • fields_modified: List of field paths that were changed")
+    print("  • actions_applied: Map of field → action type")
+    print("  • field_count: Number of fields affected")
+    print("  • modified: Boolean indicating if any changes occurred")
+    
+    print("\nExample telemetry event:")
+    print("  {")
+    print('    "event_type": "output_sanitized",')
+    print('    "tool_id": "analytics.export",')
+    print('    "fields_modified": ["records.0.ssn", "records.1.ssn", "records.0.notes"],')
+    print('    "actions_applied": {')
+    print('      "records.0.ssn": "filter",')
+    print('      "records.0.notes": "redact_pattern",')
+    print('      "records": "truncate"')
+    print("    },")
+    print('    "field_count": 3,')
+    print('    "modified": true')
+    print("  }")
+    
+    print("\nBenefits:")
+    print("  • Understand what data is being sanitized in production")
+    print("  • Audit logs show specific fields that triggered actions")
+    print("  • Debug sanitization rules with precise details")
+    print("  • Compliance: Prove sensitive data was removed")
+
+
 def main() -> None:
     ensure_policy_file()
 
@@ -460,6 +526,15 @@ def main() -> None:
 
     try:
         set_user("analyst-123", roles=["analyst"])
+        
+        # Show policy validation benefits
+        explain_policy_validation()
+        input("\n\nPress Enter to start guardrail demos...\n\n")
+        
+        # Show enhanced telemetry
+        explain_enhanced_telemetry()
+        input("\n\nPress Enter to continue...\n\n")
+        
         run_input_guardrail_examples()
         run_output_guardrail_examples()
     finally:

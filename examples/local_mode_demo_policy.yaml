@@ -1,0 +1,50 @@
+# Local Mode Demo Policy
+# Demonstrates RBAC with different denial strategies and auto-threading
+#
+# This policy supports:
+# - Multiple roles with different permission levels
+# - Denial strategy testing (raise error, static value, handler, contextual handler)
+# - Auto-threading demos (sync/async interoperability)
+
+metadata:
+  name: "local-mode-demo"
+  description: "Demo policy for local mode with various denial strategies"
+  expires: "2025-11-08T23:59:59+00:00"
+
+policies:
+  # Developer role - limited permissions for testing denial strategies
+  - role: developer
+    permissions:
+      # Database access
+      - database:query
+      
+      # External API access
+      - weather_api
+      
+      # Notification system
+      - notifications:send
+      
+      # Auto-thread demo tools
+      - demo.sync_echo
+      - demo.outer
+      - demo.inner
+      - demo.async_echo
+      - demo.async_inner
+      - demo.async_outer
+      - demo.sync_square
+      - demo.async_calls_sync
+      - demo.strict_sync
+    
+    # No admin permissions - will test denial handlers
+
+  # Admin role - full access (wildcard)
+  - role: admin
+    permissions: ["*"]
+    # Wildcard grants access to all tools including:
+    # - database:query
+    # - weather_api
+    # - notifications:send
+    # - admin:manage_users (developer doesn't have this)
+    # - All demo.* tools
+
+

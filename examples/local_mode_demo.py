@@ -2,17 +2,33 @@
 # Licensed under the Business Source License 1.1 (see LICENSE).
 # Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
 
+"""Local Mode Demo: RBAC with Various Denial Strategies.
+
+This demo shows:
+  1. RBAC - Role-based access control with different permission levels
+  2. Denial Strategies - Different ways to handle permission denials:
+     - Default: Raise PermissionDeniedError
+     - Static value: Return a pre-defined string
+     - Simple handler: Call a lambda function
+     - Contextual handler: Call a function with error details
+  3. Auto-threading - Seamless sync/async interoperability
+
+Run with:
+    python examples/local_mode_demo.py
+"""
+
 import asyncio
 import logging
 import os
-import pathlib
-
-# The SDK will read the app name from the existing ~/.config/d2/policy.yaml file
-# to determine which cloud policy to fetch. No need to override D2_POLICY_FILE
-# since we want to use the user's existing policy file for app name resolution.
+from pathlib import Path
 
 from d2 import d2_guard, set_user, configure_rbac, clear_user_context
 from d2.exceptions import PermissionDeniedError, D2Error
+
+# Set policy file path
+EXAMPLES_DIR = Path(__file__).resolve().parent
+POLICY_PATH = EXAMPLES_DIR / "local_mode_demo_policy.yaml"
+os.environ["D2_POLICY_FILE"] = str(POLICY_PATH)
 
 # Basic logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -58,11 +74,10 @@ async def manage_users(action: str):
 
 
 async def main():
-    # Initialize the D2 SDK. If D2_TOKEN is set, it will use cloud mode
-    # and fetch policy from the server. If not set, it will use local file mode.
-    # The demo_policy.yaml file provides the app name for cloud policy lookup.
+    # Initialize the D2 SDK using the local policy file
     await configure_rbac()
-
+    
+    print(f"\nUsing policy: {POLICY_PATH}")
     print("\n--- Running as a 'developer' (has database:query, weather_api, notifications:send permissions) ---")
     # A real web framework would set the context in middleware; we do it inline here.
     set_user("dev-123", roles=["developer"])
@@ -221,5 +236,4 @@ async def run_autothread_demos():
 # Entry-point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Ensure you have run `python -m d2 init` before this script.
     asyncio.run(main()) 

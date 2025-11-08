@@ -1,0 +1,100 @@
+# Example policy demonstrating sequence enforcement with tool groups
+# Prevents confused deputy attacks in multi-agent systems
+
+metadata:
+  name: "sequence-enforcement-demo"
+  description: "Demonstrates temporal RBAC with sequence enforcement and tool groups"
+  expires: "2025-11-08T23:59:59+00:00"
+  
+  # Define reusable tool groups for better maintainability
+  # Groups allow you to manage categories of tools in one place
+  tool_groups:
+    # Sensitive data sources that should never flow to external systems
+    sensitive_data:
+      - database.read_users
+      - database.read_payments
+      - database.read_sessions
+      - secrets.get_api_key
+      - secrets.get_database_creds
+    
+    # External I/O operations that could exfiltrate data
+    external_io:
+      - web.http_request
+      - web.websocket_send
+      - email.send
+      - s3.upload
+      - api.external_call
+    
+    # Internal processing tools (safe intermediaries)
+    internal_processing:
+      - analytics.summarize
+      - analytics.aggregate
+      - analytics.transform
+    
+    # File system operations
+    filesystem:
+      - file.read
+      - file.write
+      - file.delete
+
+policies:
+  - role: research_agent
+    permissions:
+      - database.read_users
+      - database.read_payments
+      - web.http_request
+      - analytics.summarize
+      - secrets.get_api_key
+      - email.send
+      - s3.upload
+    
+    # Sequence enforcement using tool groups with lazy expansion
+    # Memory efficient: @group references expand at runtime, not at load time
+    # Instead of 5×5=25 explicit rules, we keep 1 abstract rule and check membership at runtime
+    sequence:
+      # Prevent ALL direct exfiltration: ANY sensitive → ANY external
+      # This single rule blocks all 5×5=25 combinations of sensitive_data × external_io
+      - deny: ["@sensitive_data", "@external_io"]
+        reason: "Sensitive data access followed by external I/O may cause data leak"
+      
+      # Prevent ALL transitive exfiltration: sensitive → processing → external
+      # This single rule blocks all 5×3×5=75 combinations
+      - deny: ["@sensitive_data", "@internal_processing", "@external_io"]
+        reason: "Transitive data flow through processing to external endpoints"
+      
+      # Specific business rule: Payment data should not go through general analytics
+      # Can still mix explicit tools with groups
+      - deny: ["database.read_payments", "analytics.summarize"]
+        reason: "Payment data requires specialized analytics only"
+
+  - role: data_engineer
+    permissions:
+      - database.read_users
+      - analytics.summarize
+      - analytics.aggregate
+      - file.write
+    
+    sequence:
+      # Data engineers can use analytics but can't write results to filesystem
+      # after accessing sensitive data (prevents local exfiltration)
+      # Using @group references for maintainability
+      - deny: ["@sensitive_data", "@filesystem"]
+        reason: "Sensitive data cannot be written to local filesystem"
+
+  - role: integration_service
+    permissions:
+      - web.http_request
+      - analytics.aggregate
+      - file.read
+    
+    sequence:
+      # Integration services can read files and call external APIs,
+      # but not in that order (prevents file exfiltration)
+      # Using @group references: filesystem → external_io blocked
+      - deny: ["@filesystem", "@external_io"]
+        reason: "File operations followed by external I/O may exfiltrate local data"
+
+  - role: admin
+    permissions: ["*"]
+    # Admin has no sequence restrictions (wildcard role bypasses enforcement)
+

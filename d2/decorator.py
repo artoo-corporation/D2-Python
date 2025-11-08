@@ -8,6 +8,7 @@ import anyio
 import functools
 import inspect
 import asyncio
+import os
 from typing import Callable, Optional, Union, Any
 import time
 import concurrent.futures as _cf
@@ -23,10 +24,18 @@ from .telemetry import (
     authz_denied_reason_total,
     missing_policy_total,
     tool_invocation_total,
+    tool_exec_latency_ms,
     sync_in_async_denied_total,
+    sequence_pattern_blocked_total,
+    call_chain_depth_histogram,
+    user_violation_attempts_total,
+    guardrail_latency_ms,
+    tool_cooccurrence_total,
+    feature_usage_total,
+    data_flow_event_total,
     get_tracer,
 )
-from .runtime import apply_output_filters, record_tool_metrics, validate_inputs
+from .runtime import apply_output_filters, validate_inputs
 from .telemetry.plan_limits import emit_plan_limit_warning
 
 # Sentinel object to detect if a parameter was provided by the user
@@ -95,7 +104,6 @@ def d2_guard(
         @d2_guard("admin.panel", on_deny=my_handler)
         def access_admin_panel(): ...
     """
-    import os
     _STRICT_ENV = os.getenv("D2_STRICT_SYNC", "0") not in ("", "0", "false", "no")
 
     def decorator(func: Callable):
@@ -118,6 +126,9 @@ def d2_guard(
 
             async def check_and_run():
                 """Helper to run the async check and then the sync function."""
+                # Track total authorization overhead
+                authz_start = time.perf_counter()
+                
                 try:
                     with get_tracer("d2.sdk").start_as_current_span(
                         f"d2.check:{effective_tool_id}",
@@ -125,30 +136,33 @@ def d2_guard(
                     ) as span:
                         if not await manager.is_tool_in_policy_async(effective_tool_id):
                             missing_policy_total.add(1, {"d2.tool_id": effective_tool_id, "mode": manager.mode})
-                            # Emit usage event for missing policy
-                            try:
-                                reporter = getattr(manager, "_usage_reporter", None)
-                                if reporter:
-                                    reporter.track_event(
-                                        "missing_policy",
-                                        {"tool_id": effective_tool_id, "mode": manager.mode},
-                                    )
-                            except Exception:
-                                pass
-                            # Denied reason (metric + event) for missing policy
+                            # Track denial telemetry
                             try:
                                 authz_denied_reason_total.add(1, {"reason": "missing_policy", "mode": manager.mode})
                                 reporter = getattr(manager, "_usage_reporter", None)
                                 if reporter:
                                     reporter.track_event(
-                                        "denied_reason",
-                                        {"tool_id": effective_tool_id, "reason": "missing_policy"},
+                                        "authz_decision",
+                                        {
+                                            "tool_id": effective_tool_id,
+                                            "result": "denied",
+                                            "reason": "missing_policy",
+                                            "mode": manager.mode,
+                                        },
                                     )
                             except Exception:
                                 pass
                             raise MissingPolicyError(tool_id=effective_tool_id)
 
+                        # Layer 1: RBAC check
+                        rbac_start = time.perf_counter()
                         is_allowed = await manager.check_async(effective_tool_id)
+                        rbac_duration_ms = (time.perf_counter() - rbac_start) * 1000.0
+                        guardrail_latency_ms.record(rbac_duration_ms, {
+                            "type": "rbac_check",
+                            "tool_id": effective_tool_id,
+                            "result": "allowed" if is_allowed else "denied"
+                        })
                         span.set_attribute("d2.is_allowed", is_allowed)
 
                         user_context = get_user_context()
@@ -163,6 +177,7 @@ def d2_guard(
                             tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                             return await _handle_permission_denied(error)
 
+                        # Layer 2: Input Validation
                         bound = inspect.signature(func).bind(*args, **kwargs)
                         bound.apply_defaults()
                         validation_error = await validate_inputs(
@@ -174,10 +189,173 @@ def d2_guard(
                             has_var_kwargs=has_var_kwargs,
                         )
                         if validation_error is not None:
+                            # Note: All telemetry (OTEL + D2 events) sent by validate_inputs() in guard.py
                             return await _handle_permission_denied(validation_error)
+
+                        # Layer 3: Sequence enforcement
+                        sequence_rules = await manager.get_sequence_rules()
+                        if sequence_rules:
+                            sequence_start = time.perf_counter()
+                            from .runtime.sequence import SequenceValidator
+                            # Get tool_groups for lazy @group expansion
+                            bundle = manager._get_bundle()
+                            tool_groups = bundle.get_tool_groups() if bundle else {}
+                            validator = SequenceValidator(tool_groups=tool_groups)
+                            sequence_error = validator.validate_sequence(
+                                current_history=user_context.call_history if user_context else (),
+                                next_tool_id=effective_tool_id,
+                                sequence_rules=sequence_rules
+                            )
+                            sequence_duration_ms = (time.perf_counter() - sequence_start) * 1000.0
+                            guardrail_latency_ms.record(sequence_duration_ms, {
+                                "type": "sequence_check",
+                                "tool_id": effective_tool_id,
+                                "result": "denied" if sequence_error else "allowed"
+                            })
+                            
+                            if sequence_error is not None:
+                                # Comprehensive telemetry for sequence violation
+                                try:
+                                    history = user_context.call_history if user_context else ()
+                                    
+                                    # Determine pattern type based on chain length
+                                    chain_length = len(history) + 1
+                                    if chain_length == 2:
+                                        pattern_type = "direct_2hop"
+                                    elif chain_length == 3:
+                                        pattern_type = "transitive_3hop"
+                                    elif chain_length == 4:
+                                        pattern_type = "complex_4hop"
+                                    else:
+                                        pattern_type = f"complex_{chain_length}hop"
+                                    
+                                    # Get source tool (most recent in history)
+                                    source_tool = history[-1] if history else "none"
+                                    
+                                    # Record detailed sequence pattern
+                                    sequence_pattern_blocked_total.add(1, {
+                                        "pattern_type": pattern_type,
+                                        "source_tool": source_tool,
+                                        "target_tool": effective_tool_id,
+                                        "chain_length": str(chain_length),
+                                        "user_role": ",".join(user_context.roles) if user_context and user_context.roles else "unknown"
+                                    })
+                                    
+                                    # Track user violation attempts (insider threat detection)
+                                    user_violation_attempts_total.add(1, {
+                                        "user_id": user_context.user_id if user_context else "unknown",
+                                        "violation_type": "sequence",
+                                    })
+                                    
+                                    # Existing basic metrics
+                                    authz_denied_reason_total.add(
+                                        1, {"reason": "sequence_violation", "mode": manager.mode}
+                                    )
+                                    
+                                    # Send consolidated authz_decision event to D2 cloud
+                                    reporter = getattr(manager, "_usage_reporter", None)
+                                    if reporter:
+                                        reporter.track_event(
+                                            "authz_decision",
+                                            {
+                                                "tool_id": effective_tool_id,
+                                                "result": "denied",
+                                                "reason": "sequence_violation",
+                                                "mode": manager.mode,
+                                                # Sequence-specific context for analysis
+                                                "pattern_type": pattern_type,
+                                                "source_tool": source_tool,
+                                                "chain_length": chain_length,
+                                                "call_history": list(history) + [effective_tool_id],
+                                                "user_role": ",".join(user_context.roles) if user_context and user_context.roles else "unknown",
+                                            },
+                                        )
+                                except Exception:
+                                    pass
+                                tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
+                                return await _handle_permission_denied(sequence_error)
                 except D2PlanLimitError:
                     emit_plan_limit_warning()
                     raise
+
+                # Track comprehensive metrics for successful authorization
+                # Note: Capture history BEFORE recording current call to track data flow correctly
+                try:
+                    history = user_context.call_history if user_context else ()
+                    
+                    # 1. Track call chain depth
+                    call_chain_depth_histogram.record(len(history), {
+                        "user_id": user_context.user_id if user_context else "unknown",
+                        "current_tool": effective_tool_id
+                    })
+                    
+                    if history:
+                        source_tool = history[-1]
+                        data_flow_event_total.add(1, {
+                            "source_tool": source_tool,
+                            "destination_tool": effective_tool_id,
+                        })
+                        # Send to D2 cloud
+                        reporter = getattr(manager, "_usage_reporter", None)
+                        if reporter:
+                            reporter.track_event(
+                                "data_flow",
+                                {
+                                    "source_tool": source_tool,
+                                    "destination_tool": effective_tool_id,
+                                }
+                            )
+                    
+                    # 2. Track tool co-occurrence (which tools are called together)
+                    if len(history) >= 1:
+                        tool_cooccurrence_total.add(1, {
+                            "tool_a": history[-1],
+                            "tool_b": effective_tool_id,
+                            "within_request": "true"
+                        })
+                    
+                    # 3. Track anomalous call chain depth
+                    if len(history) >= 5:  # 5+ hop chains are unusual
+                        reporter = getattr(manager, "_usage_reporter", None)
+                        if reporter:
+                            reporter.track_event(
+                                "anomaly_detected",
+                                {
+                                    "anomaly_type": "unusual_call_chain_depth",
+                                    "call_chain_depth": len(history),
+                                    "baseline": 3,  # Normal is typically 2-3 hops
+                                    "tools_in_chain": list(history) + [effective_tool_id],
+                                }
+                            )
+                except Exception:
+                    # Telemetry never interferes
+                    pass
+
+                # Record total authorization overhead (all layers combined)
+                authz_duration_ms = (time.perf_counter() - authz_start) * 1000.0
+                guardrail_latency_ms.record(authz_duration_ms, {
+                    "type": "total_authz_overhead",
+                    "tool_id": effective_tool_id,
+                })
+                
+                # Send authorization overhead to D2 cloud for performance analytics
+                try:
+                    reporter = getattr(manager, "_usage_reporter", None)
+                    if reporter:
+                        reporter.track_event(
+                            "total_authz_overhead",
+                            {
+                                "tool_id": effective_tool_id,
+                                "overhead_ms": authz_duration_ms,
+                                "mode": manager.mode,
+                            }
+                        )
+                except Exception:
+                    pass
+
+                # Record this call in history AFTER capturing telemetry, BEFORE execution
+                from .context import record_tool_call
+                record_tool_call(effective_tool_id)
 
                 # If permission is granted, execute the tool and record metrics
                 exec_start = time.perf_counter()
@@ -192,32 +370,29 @@ def d2_guard(
                             user_context=user_context,
                         )
                     except PermissionDeniedError as error:
+                        # Note: All telemetry (OTEL + authz_decision) sent by apply_output_filters() in output_filter.py
                         tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
-                        try:
-                            authz_denied_reason_total.add(
-                                1, {"reason": "output_validation", "mode": manager.mode}
-                            )
-                            reporter = getattr(manager, "_usage_reporter", None)
-                            if reporter:
-                                reporter.track_event(
-                                    "denied_reason",
-                                    {"tool_id": effective_tool_id, "reason": "output_validation"},
-                                )
-                        except Exception:
-                            pass
-                        record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                        duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                        tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "denied"})
                         return await _handle_permission_denied(error)
 
-                    record_tool_metrics(manager, effective_tool_id, "success", exec_start)
+                    # Tool execution succeeded - record OTEL metrics
+                    duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                    tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "success"})
+                    tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "success"})
                     return result
                 except D2PlanLimitError as e:
                     emit_plan_limit_warning()
                     raise
                 except PermissionDeniedError as error:
-                    record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                    duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                    tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "denied"})
+                    tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                     raise
                 except Exception:
-                    record_tool_metrics(manager, effective_tool_id, "error", exec_start)
+                    duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                    tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "error"})
+                    tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "error"})
                     raise
 
             # Detect if an event loop is already running in this thread.
@@ -231,24 +406,19 @@ def d2_guard(
                 effective_strict = strict if strict is not None else _STRICT_ENV
                 if effective_strict:
                     sync_in_async_denied_total.add(1)
-                    # Emit usage event for sync-in-async denial
-                    try:
-                        reporter = getattr(manager, "_usage_reporter", None)
-                        if reporter:
-                            reporter.track_event(
-                                "sync_in_async_denied",
-                                {"tool_id": effective_tool_id, "reason": "strict_mode"},
-                            )
-                    except Exception:
-                        pass
-                    # Denied reason (metric + event) for strict sync-in-async
+                    # Track denial telemetry
                     try:
                         authz_denied_reason_total.add(1, {"reason": "strict_sync", "mode": manager.mode})
                         reporter = getattr(manager, "_usage_reporter", None)
                         if reporter:
                             reporter.track_event(
-                                "denied_reason",
-                                {"tool_id": effective_tool_id, "reason": "strict_sync"},
+                                "authz_decision",
+                                {
+                                    "tool_id": effective_tool_id,
+                                    "result": "denied",
+                                    "reason": "strict_sync_in_async",
+                                    "mode": manager.mode,
+                                },
                             )
                     except Exception:
                         pass
@@ -276,6 +446,9 @@ def d2_guard(
         async def async_wrapper(*args, **kwargs):
             """Wrapper for asynchronous functions."""
             manager = get_policy_manager(instance_name)
+            
+            # Track total authorization overhead
+            authz_start = time.perf_counter()
 
             try:
                 with get_tracer("d2.sdk").start_as_current_span(
@@ -284,30 +457,33 @@ def d2_guard(
                 ) as span:
                     if not await manager.is_tool_in_policy_async(effective_tool_id):
                         missing_policy_total.add(1, {"d2.tool_id": effective_tool_id, "mode": manager.mode})
-                        # Emit usage event for missing policy
-                        try:
-                            reporter = getattr(manager, "_usage_reporter", None)
-                            if reporter:
-                                reporter.track_event(
-                                    "missing_policy",
-                                    {"tool_id": effective_tool_id, "mode": manager.mode},
-                                )
-                        except Exception:
-                            pass
-                        # Denied reason (metric + event) for missing policy
+                        # Track denial telemetry
                         try:
                             authz_denied_reason_total.add(1, {"reason": "missing_policy", "mode": manager.mode})
                             reporter = getattr(manager, "_usage_reporter", None)
                             if reporter:
                                 reporter.track_event(
-                                    "denied_reason",
-                                    {"tool_id": effective_tool_id, "reason": "missing_policy"},
+                                    "authz_decision",
+                                    {
+                                        "tool_id": effective_tool_id,
+                                        "result": "denied",
+                                        "reason": "missing_policy",
+                                        "mode": manager.mode,
+                                    },
                                 )
                         except Exception:
                             pass
                         raise MissingPolicyError(tool_id=effective_tool_id)
                     
+                    # Layer 1: RBAC check
+                    rbac_start = time.perf_counter()
                     is_allowed = await manager.check_async(effective_tool_id)
+                    rbac_duration_ms = (time.perf_counter() - rbac_start) * 1000.0
+                    guardrail_latency_ms.record(rbac_duration_ms, {
+                        "type": "rbac_check",
+                        "tool_id": effective_tool_id,
+                        "result": "allowed" if is_allowed else "denied"
+                    })
                     span.set_attribute("d2.is_allowed", is_allowed)
 
                     user_context = get_user_context()
@@ -333,7 +509,91 @@ def d2_guard(
                         has_var_kwargs=has_var_kwargs,
                     )
                     if validation_error is not None:
+                        # Note: All telemetry (OTEL + D2 events) sent by validate_inputs() in guard.py
                         return await _handle_permission_denied(validation_error)
+
+                    # Layer 3: Sequence enforcement
+                    sequence_rules = await manager.get_sequence_rules()
+                    if sequence_rules:
+                        sequence_start = time.perf_counter()
+                        from .runtime.sequence import SequenceValidator
+                        # Get tool_groups for lazy @group expansion
+                        bundle = manager._get_bundle()
+                        tool_groups = bundle.get_tool_groups() if bundle else {}
+                        validator = SequenceValidator(tool_groups=tool_groups)
+                        sequence_error = validator.validate_sequence(
+                            current_history=user_context.call_history if user_context else (),
+                            next_tool_id=effective_tool_id,
+                            sequence_rules=sequence_rules
+                        )
+                        sequence_duration_ms = (time.perf_counter() - sequence_start) * 1000.0
+                        guardrail_latency_ms.record(sequence_duration_ms, {
+                            "type": "sequence_check",
+                            "tool_id": effective_tool_id,
+                            "result": "denied" if sequence_error else "allowed"
+                        })
+                        
+                        if sequence_error is not None:
+                            # Comprehensive telemetry for sequence violation
+                            try:
+                                history = user_context.call_history if user_context else ()
+                                
+                                # Determine pattern type based on chain length
+                                chain_length = len(history) + 1
+                                if chain_length == 2:
+                                    pattern_type = "direct_2hop"
+                                elif chain_length == 3:
+                                    pattern_type = "transitive_3hop"
+                                elif chain_length == 4:
+                                    pattern_type = "complex_4hop"
+                                else:
+                                    pattern_type = f"complex_{chain_length}hop"
+                                
+                                # Get source tool (most recent in history)
+                                source_tool = history[-1] if history else "none"
+                                
+                                # Record detailed sequence pattern
+                                sequence_pattern_blocked_total.add(1, {
+                                    "pattern_type": pattern_type,
+                                    "source_tool": source_tool,
+                                    "target_tool": effective_tool_id,
+                                    "chain_length": str(chain_length),
+                                    "user_role": ",".join(user_context.roles) if user_context and user_context.roles else "unknown"
+                                })
+                                
+                                # Track user violation attempts (insider threat detection)
+                                user_violation_attempts_total.add(1, {
+                                    "user_id": user_context.user_id if user_context else "unknown",
+                                    "violation_type": "sequence",
+                                })
+                                
+                                # Existing basic metrics
+                                authz_denied_reason_total.add(
+                                    1, {"reason": "sequence_violation", "mode": manager.mode}
+                                )
+                                
+                                # Send consolidated authz_decision event to D2 cloud
+                                reporter = getattr(manager, "_usage_reporter", None)
+                                if reporter:
+                                    reporter.track_event(
+                                        "authz_decision",
+                                        {
+                                            "tool_id": effective_tool_id,
+                                            "result": "denied",
+                                            "reason": "sequence_violation",
+                                            "mode": manager.mode,
+                                            # Sequence-specific context for analysis
+                                            "pattern_type": pattern_type,
+                                            "source_tool": source_tool,
+                                            "chain_length": chain_length,
+                                            "call_history": list(history) + [effective_tool_id],
+                                            "user_role": ",".join(user_context.roles) if user_context and user_context.roles else "unknown",
+                                        },
+                                    )
+                            except Exception:
+                                pass
+                            tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
+                            return await _handle_permission_denied(sequence_error)
             except D2PlanLimitError:
                 emit_plan_limit_warning(
                     message=(
@@ -342,6 +602,76 @@ def d2_guard(
                     )
                 )
                 raise
+
+            # Track comprehensive metrics for successful authorization
+            # Note: Capture history BEFORE recording current call to track data flow correctly
+            try:
+                history = user_context.call_history if user_context else ()
+                
+                # 1. Track call chain depth
+                call_chain_depth_histogram.record(len(history), {
+                    "user_id": user_context.user_id if user_context else "unknown",
+                    "current_tool": effective_tool_id
+                })
+                
+                # 2. Track sequence for compliance (what was called before this)
+                if history:
+                    source_tool = history[-1]
+                    sequence_pattern_blocked_total.add(1, {
+                        "source_tool": source_tool,
+                        "destination_tool": effective_tool_id,
+                    })
+                
+                # 2. Track tool co-occurrence (which tools are called together)
+                if len(history) >= 1:
+                    tool_cooccurrence_total.add(1, {
+                        "tool_a": history[-1],
+                        "tool_b": effective_tool_id,
+                        "within_request": "true"
+                    })
+                
+                # 3. Track anomalous call chain depth
+                if len(history) >= 5:  # 5+ hop chains are unusual
+                    reporter = getattr(manager, "_usage_reporter", None)
+                    if reporter:
+                        reporter.track_event(
+                            "anomaly_detected",
+                            {
+                                "anomaly_type": "unusual_call_chain_depth",
+                                "call_chain_depth": len(history),
+                                "baseline": 3,  # Normal is typically 2-3 hops
+                                "tools_in_chain": list(history) + [effective_tool_id],
+                            }
+                        )
+            except Exception:
+                # Telemetry never interferes
+                pass
+
+            # Record total authorization overhead (all layers combined)
+            authz_duration_ms = (time.perf_counter() - authz_start) * 1000.0
+            guardrail_latency_ms.record(authz_duration_ms, {
+                "type": "total_authz_overhead",
+                "tool_id": effective_tool_id,
+            })
+            
+            # Send authorization overhead to D2 cloud for performance analytics
+            try:
+                reporter = getattr(manager, "_usage_reporter", None)
+                if reporter:
+                    reporter.track_event(
+                        "total_authz_overhead",
+                        {
+                            "tool_id": effective_tool_id,
+                            "overhead_ms": authz_duration_ms,
+                            "mode": manager.mode,
+                        }
+                    )
+            except Exception:
+                pass
+
+            # Record this call in history AFTER capturing telemetry, BEFORE execution
+            from .context import record_tool_call
+            record_tool_call(effective_tool_id)
 
             # If permission is granted, execute the async tool and record metrics
             exec_start = time.perf_counter()
@@ -355,23 +685,16 @@ def d2_guard(
                         user_context=user_context,
                     )
                 except PermissionDeniedError as error:
+                    # Note: All telemetry (OTEL + authz_decision) sent by apply_output_filters() in output_filter.py
                     tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
-                    try:
-                        authz_denied_reason_total.add(
-                            1, {"reason": "output_validation", "mode": manager.mode}
-                        )
-                        reporter = getattr(manager, "_usage_reporter", None)
-                        if reporter:
-                            reporter.track_event(
-                                "denied_reason",
-                                {"tool_id": effective_tool_id, "reason": "output_validation"},
-                            )
-                    except Exception:
-                        pass
-                    record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                    duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                    tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "denied"})
                     return await _handle_permission_denied(error)
 
-                record_tool_metrics(manager, effective_tool_id, "success", exec_start)
+                # Tool execution succeeded - record OTEL metrics
+                duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "success"})
+                tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "success"})
                 return result
             except D2PlanLimitError:
                 emit_plan_limit_warning(
@@ -382,10 +705,14 @@ def d2_guard(
                 )
                 raise
             except PermissionDeniedError as error:
-                record_tool_metrics(manager, effective_tool_id, "denied", exec_start)
+                duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "denied"})
+                tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                 raise
             except Exception:
-                record_tool_metrics(manager, effective_tool_id, "error", exec_start)
+                duration_ms = (time.perf_counter() - exec_start) * 1000.0
+                tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "error"})
+                tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "error"})
                 raise
 
         # ------------------------------------------------------------------

@@ -1,7 +1,12 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 """Telemetry package exposing metrics, tracers, and usage reporting."""
 
 from .runtime import get_tracer, meter
 from .metrics import (
+    # Existing metrics
     authz_decision_total,
     missing_policy_total,
     policy_poll_total,
@@ -23,11 +28,27 @@ from .metrics import (
     context_leak_total,
     context_stale_total,
     sync_in_async_denied_total,
+    # New security & threat detection metrics
+    sequence_pattern_blocked_total,
+    sensitive_data_access_total,
+    call_chain_depth_histogram,
+    user_violation_attempts_total,
+    # New operations & performance metrics
+    guardrail_latency_ms,
+    policy_cache_hits_total,
+    tool_cooccurrence_total,
+    # New business & product metrics
+    feature_usage_total,
+    policy_complexity_score,
+    tool_cost_units_total,
+    # New compliance & audit metrics
+    data_flow_event_total,
 )
 from .usage import UsageReporter
 
 __all__ = [
     "UsageReporter",
+    # Existing metrics
     "authz_decision_total",
     "missing_policy_total",
     "policy_poll_total",
@@ -49,6 +70,22 @@ __all__ = [
     "context_leak_total",
     "context_stale_total",
     "sync_in_async_denied_total",
+    # New security & threat detection metrics
+    "sequence_pattern_blocked_total",
+    "sensitive_data_access_total",
+    "call_chain_depth_histogram",
+    "user_violation_attempts_total",
+    # New operations & performance metrics
+    "guardrail_latency_ms",
+    "policy_cache_hits_total",
+    "tool_cooccurrence_total",
+    # New business & product metrics
+    "feature_usage_total",
+    "policy_complexity_score",
+    "tool_cost_units_total",
+    # New compliance & audit metrics
+    "data_flow_event_total",
+    # Utilities
     "get_tracer",
     "meter",
 ]

@@ -3,6 +3,7 @@
 # Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
 
 import contextvars
+import uuid
 from dataclasses import dataclass
 from typing import Optional, Set, Iterable, ContextManager
 from contextlib import contextmanager
@@ -13,6 +14,8 @@ class UserContext:
     """Immutable dataclass to hold user identity information."""
     user_id: Optional[str] = None
     roles: Optional[frozenset[str]] = None
+    call_history: tuple[str, ...] = ()  # Sequence of tool_ids called in this request
+    request_id: Optional[str] = None  # Unique ID to correlate all events within a request
 
 # Context variable to hold the UserContext for the current async task or thread.
 _user_context = contextvars.ContextVar("d2_user_context", default=UserContext())
@@ -47,8 +50,16 @@ def set_user_context(user_id: Optional[str] = None, roles: Optional[Iterable[str
         - Other services (HTTP requests, message queues)
         
         For these cases, set context explicitly in those contexts or use sealed tokens to propagate identity.
+    
+    Request ID:
+        A unique request_id is automatically generated to correlate all events
+        within this context. This cannot be overridden by users for security reasons.
     """
-    token = _user_context.set(UserContext(user_id=user_id, roles=frozenset(roles) if roles else None))
+    token = _user_context.set(UserContext(
+        user_id=user_id, 
+        roles=frozenset(roles) if roles else None,
+        request_id=str(uuid.uuid4())  # Auto-generated, not user-controllable
+    ))
     try:
         yield
     finally:
@@ -140,8 +151,19 @@ def set_user(user_id: Optional[str] = None, roles: Optional[Iterable[str]] = Non
     The context is automatically isolated per-task thanks to `contextvars`.
     Remember to call ``d2.clear_user_context()`` at the end of the request or
     use the provided ASGI middleware which handles this automatically.
+    
+    A unique request_id is automatically generated to correlate all events
+    within this request. This cannot be overridden by users for security reasons.
+    
+    Args:
+        user_id: User identifier
+        roles: User roles
     """
-    _user_context.set(UserContext(user_id=user_id, roles=frozenset(roles) if roles else None)) 
+    _user_context.set(UserContext(
+        user_id=user_id, 
+        roles=frozenset(roles) if roles else None,
+        request_id=str(uuid.uuid4())  # Auto-generated, not user-controllable
+    )) 
 
 # ---------------------------------------------------------------------------
 # Getter helpers (used by PolicyManager and for public convenience)
@@ -155,6 +177,34 @@ def get_user_id() -> Optional[str]:
 def get_user_roles() -> Optional[frozenset[str]]:
     """Return the current set of roles (``None`` when none assigned)."""
     return get_current_user().roles
+
+
+def record_tool_call(tool_id: str) -> None:
+    """Append a tool_id to the current request's call history.
+    
+    Used by the @d2_guard decorator to track the sequence of tool calls
+    within a single request for sequence enforcement.
+    
+    Args:
+        tool_id: The ID of the tool being called
+        
+    Example:
+        >>> set_user("alice", ["admin"])
+        >>> record_tool_call("database.read")
+        >>> record_tool_call("analytics.process")
+        >>> ctx = get_user_context()
+        >>> ctx.call_history
+        ('database.read', 'analytics.process')
+    """
+    ctx = get_user_context()
+    new_history = ctx.call_history + (tool_id,)
+    _user_context.set(UserContext(
+        user_id=ctx.user_id,
+        roles=ctx.roles,
+        call_history=new_history,
+        request_id=ctx.request_id  # Preserve request_id
+    ))
+
 
 # ---------------------------------------------------------------------------
 # Public export list – keeps internal helpers private

@@ -65,6 +65,9 @@ class InputValidator:
         # Accept either {"input": {...}} or direct mapping of argument conditions
         if "input" in policy_conditions:
             input_rules = policy_conditions["input"] or {}
+        elif "output" in policy_conditions:
+            # Output-only policy, no input validation needed
+            return ValidationResult(allowed=True)
         else:
             input_rules = policy_conditions
 

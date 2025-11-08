@@ -1,4 +1,4 @@
-# D2 SDK – Quick Start
+# D2 SDK: Quick Start
 
 <div align="left">
 
@@ -10,57 +10,60 @@
 </div>
 
 
-This page is the **5-minute guide**. For deeper explanations read `README.md`.
+This is the 5-minute getting started guide. For more details, read `README.md`.
 
 ---
 
-## 1  Install
+## Step 1: Install
+
 ```bash
-pip install d2-sdk
-# CLI helpers
-pip install "d2-sdk[cli]"
+#for both SDK and CLI
+pip install "d2-sdk[all]"
 ```
 
-## 2  Protect a tool
+## Step 2: Protect a function
+
 ```python
 from d2 import d2_guard
 
 @d2_guard("weather_api:read")
-async def get_weather(city: str): ...
+async def get_weather(city: str):
+    ...
 ```
 
-## 3  Generate a local policy
+## Step 3: Create a local policy file
 
-Generate a starter policy file for **local mode**. The command scans your
-project for any functions already decorated with **`@d2_guard`** and seeds the
-permissions list.
+Generate a starter policy file that works in local mode (no cloud account needed). The command scans your project for any functions decorated with `@d2_guard` and adds them to the permissions list.
 
-*Haven’t added the decorator yet?* No problem—run it now, add decorators later,
-and re-run `d2 init --force` to refresh the file.
+Haven't added the decorator yet? No problem. Run the command now, add decorators later, and run `d2 init --force` again to update the file.
 
 ```bash
-# Scan current working directory and output YAML (~/.config/d2/policy.yaml)
+# Scans current directory and creates ~/.config/d2/policy.yaml
 python -m d2 init
 
-# Custom path & JSON output
+# Specify a custom path and use JSON format
 python -m d2 init --path ./src --format json
 ```
-Creates `~/.config/d2/policy.yaml` by default.
 
-Minimal schema:
+The command creates `~/.config/d2/policy.yaml` by default.
+
+Here's a minimal policy file:
+
 ```yaml
 metadata:
   name: your-app-name
-  description: Optional
-  expires: ISO-8601
+  description: Optional description
+  expires: 2025-12-31T23:59:59+00:00
 policies:
   - role: admin
     permissions: ["*"]
 ```
 
-### 3.1  Add guardrails with input/output policies
+### Adding input and output guardrails
 
-Want a quick safety net without touching your code? Drop the rules into policy and D2 enforces them for you.
+You can add safety rules without changing your code. Just add the rules to your policy and D2 will enforce them automatically.
+
+**Input validation example:**
 
 ```yaml
 - role: analyst
@@ -79,9 +82,9 @@ def generate(table: str, row_limit: int):
     ...
 ```
 
-With the policy in place, D2 blocks calls that wander off the guardrails and logs `reason="input_validation"` so you know why.
+With this policy, D2 blocks any calls with invalid arguments and logs `reason="input_validation"` so you know what happened.
 
-Need to clean the response on the way out?
+**Output sanitization example:**
 
 ```yaml
 - role: support
@@ -101,110 +104,114 @@ def lookup_customer(customer_id: str):
     ...
 ```
 
-The decorator strips PII, masks values, and if anything still violates the policy D2 raises `PermissionDeniedError` with `reason="output_validation"`. Your `on_deny` handler runs if you configured one, and telemetry captures the same reason code for dashboards/alerts.
+The decorator automatically removes PII and masks sensitive values. If something violates the policy, D2 raises `PermissionDeniedError` with `reason="output_validation"`. Your `on_deny` handler runs if you set one up, and telemetry records the same reason code.
 
-Want to see it live? Run `python examples/guardrails_demo.py`—it boots with `examples/guardrails_policy.yaml`, denies bad inputs, and shows how responses get scrubbed automatically.
+**Important note about typos**
+
+D2 checks all operators and regex patterns when it loads your policy, not when your code runs. This catches problems early:
+
+- Unknown operators cause `ConfigurationError` (common mistakes: `minimum` should be `min`, `maximum` should be `max`, `minlength` should be `minLength`)
+- Invalid regex patterns cause `ConfigurationError` with details about what's wrong
+- Bad policies fail at startup, not in production
+
+All operator names are case-sensitive. If you get a `ConfigurationError`, check the error message for suggestions.
+
+Want to see it working? Run `python examples/guardrails_demo.py`. It uses `examples/guardrails_policy.yaml`, blocks bad inputs, and shows how responses get cleaned up.
 
 ### Nested guards
-- Guarded functions can call other guarded functions. Each layer re-validates inputs and output using the same user context, so inner responses are cleaned before outer logic sees them.
 
-## 4  Initialise RBAC (one line)
+Guarded functions can call other guarded functions. Each layer checks inputs and outputs using the same user context, so inner responses get cleaned before outer functions see them.
+
+## Step 4: Initialize RBAC (one line of code)
 
 ```python
-# Async service (FastAPI lifespan, Quart, etc.)
+# For async services (FastAPI, Quart, etc.)
 import asyncio, d2
 asyncio.run(d2.configure_rbac_async())
 
-# Sync app (Flask, Django, scripts)
+# For sync apps (Flask, Django, scripts)
 d2.configure_rbac_sync()
 ```
 
-## 5  Inject user context & auto-clear it
+## Step 5: Set user context and clear it
 
 ### Async route (no middleware needed)
+
 ```python
 from d2 import set_user, clear_context_async
 
-@clear_context_async                 # auto-clears context after await
+@clear_context_async  # Clears context automatically after await
 async def ping(request):
     set_user(request.state.user_id, ["viewer"])
     return "pong"
 ```
-> Optional: Behind a *trusted reverse-proxy* you can install
-> `d2.ASGIMiddleware` instead of manually calling `set_user()`.
 
-```python
-from d2 import ASGIMiddleware, headers_extractor
+### Using context managers
 
-app.add_middleware(
-    ASGIMiddleware,
-    user_extractor=headers_extractor,  # only if headers are injected by proxy
-)
-```
-
-## 4.1 Configure D2 in your app (context manager)
 ```python
 import d2
 
-# Initialize at startup (async services)
+# Initialize once at startup (async services)
 async def lifespan():
     await d2.configure_rbac_async()
 
-# Per request/interaction
+# For each request
 def handle_request(user_id: str, roles: list[str]):
-    # Use context manager to avoid leaks
+    # Use context manager to prevent leaks
     with d2.set_user_context(user_id, roles):
         weather = get_weather("San Francisco")
-        # ... call other guarded tools ...
-    # Context auto-cleared on exit
+        # Call other protected functions here
+    # Context gets cleared automatically when block exits
 ```
 
-> Security Note: Prefer `with d2.set_user_context(...)` to guarantee cleanup. If you use `d2.set_user()`, call `d2.clear_user_context()` before returning.
+**Security tip:** Use `with d2.set_user_context(...)` to make sure cleanup happens. If you use `d2.set_user()` instead, you must call `d2.clear_user_context()` before the function returns.
 
-### You're all set!
-Protected functions are default‑deny until granted in your policy.
+### You're ready to go
 
-- Calls raise `PermissionDeniedError` until authorized
-- Edit `~/.config/d2/policy.yaml` to grant permissions to roles
-- Validate with `python -m d2 inspect`
+Protected functions are blocked by default until you grant access in your policy.
 
-`headers_extractor` is a tiny helper that pulls the user ID and comma-separated
-role list from the `X-D2-User` and `X-D2-Roles` HTTP headers.  Use it **only**
-when a trusted upstream component overwrites those headers.
+- Calls raise `PermissionDeniedError` when not authorized
+- Edit `~/.config/d2/policy.yaml` to give permissions to roles
+- Check your policy with `python -m d2 inspect`
 
-### Sync route
+### Sync route example
+
 ```python
 from d2 import set_user, clear_context
 
-@clear_context                       # auto-clears after return
+@clear_context  # Clears context automatically after return
 def handler(request):
     set_user(request.user.id, roles=request.user.roles)
     return get_weather("Berlin")
 ```
 
-## 6  Handy CLI commands
-| command | purpose |
-|---------|---------|
-| `d2 diagnose` | Check local policy limits & expiry |
-| `d2 inspect`  | List permissions (local or cloud) |
-| `d2 pull`     | Download cloud bundle (token) |
-| `d2 draft`    | Upload policy draft (token with policy:write) – note: 403 quota_apps_exceeded is non‑retryable |
-| `d2 publish`  | Publish signed bundle (token with policy:write) – handles 409 ETag retry; surfaces 403 quota_apps_exceeded |
+## Step 6: Useful CLI commands
 
-## 7  Environment Variables (recap)
-- `D2_TOKEN`: if set, enables Cloud mode; unset → Local mode
-- `D2_POLICY_FILE`: explicit path to local policy (overrides discovery)
-- `D2_TELEMETRY`: `off|metrics|usage|all` (default `all`)
-- `D2_JWKS_URL`: override JWKS endpoint (rare)
-- `D2_STRICT_SYNC`: set to `1` to fail sync-in-async rather than auto-threading
-- `D2_API_URL`: control-plane base URL (defaults via `DEFAULT_API_URL` in code)
-- `D2_STATE_PATH`: override path for persisted bundle state (`~/.config/d2/bundles.json` by default)
+| Command | What it does |
+|---------|--------------|
+| `d2 diagnose` | Check local policy limits and expiry date |
+| `d2 inspect` | Show all permissions (works with local or cloud) |
+| `d2 pull` | Download cloud policy bundle (needs token) |
+| `d2 draft` | Upload policy draft (needs token with policy:write permission) |
+| `d2 publish` | Publish signed policy bundle (needs token with policy:write permission) |
 
-Cloud mode notes:
-- JWKS rotation is automatic. The server can signal refresh; SDK updates keys transparently.
-- Plan/app limits are surfaced clearly in CLI and SDK (`D2PlanLimitError` for 402; `quota_apps_exceeded` for 403).
- - Privacy: Any `user_id` you pass to `d2.set_user()` may be included as-is in cloud usage events. Hash/pseudonymize if needed.
-- Telemetry never breaks your app—if the exporter isn’t present, we silently no-op.
+## Step 7: Environment variables reference
+
+- `D2_TOKEN`: When set, enables cloud mode. When unset, uses local mode.
+- `D2_POLICY_FILE`: Specific path to your local policy file (skips auto-discovery)
+- `D2_TELEMETRY`: Control telemetry (`off`, `metrics`, `usage`, or `all`). Default is `all`.
+- `D2_JWKS_URL`: Override the JWKS endpoint (rarely needed)
+- `D2_STRICT_SYNC`: Set to `1` to make sync-in-async fail instead of auto-threading
+- `D2_API_URL`: Base URL for the control plane (has a built-in default)
+- `D2_STATE_PATH`: Path for cached bundle state (defaults to `~/.config/d2/bundles.json`)
+
+### Cloud mode notes
+
+- JWKS rotation happens automatically. The server tells the SDK when to refresh keys.
+- Plan and app limits are shown clearly in the CLI and SDK (`D2PlanLimitError` for 402 errors, `quota_apps_exceeded` for 403 errors).
+- Privacy: Any `user_id` you pass to `d2.set_user()` might be included in cloud usage events. Hash or change it if needed.
+- Telemetry problems never crash your app. If the exporter isn't working, we skip it silently.
 
 ---
-Need more details?  Jump to the full `README.md` . 
+
+Need more information? Read the full `README.md` file.

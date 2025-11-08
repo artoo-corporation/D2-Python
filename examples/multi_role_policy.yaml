@@ -1,0 +1,147 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# D2 Multi-Role Policy Example
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This policy demonstrates the multi-role feature where multiple roles can share
+# the same permissions, guardrails, and sequence rules.
+#
+# Benefits:
+#   - Reduces policy duplication (DRY principle)
+#   - Easier to maintain (update once, applies to all roles)
+#   - Clearer intent ("these roles should have identical access")
+#
+# Syntax Options:
+#   1. Single role (backwards compatible):
+#      role: "analyst"
+#
+#   2. Multiple roles as list:
+#      role: ["analyst", "senior_analyst", "data_engineer"]
+#
+#   3. Using 'roles' plural key:
+#      roles: ["contractor", "guest"]
+# ═══════════════════════════════════════════════════════════════════════════════
+
+metadata:
+  name: "multi-role-demo"
+  description: "Demonstrates multi-role policy syntax for D2 SDK"
+  expires: "2025-11-08T23:59:59+00:00"
+
+policies:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 1: Data Analysts (Multiple Roles with Shared Guardrails)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # All analyst roles get identical permissions and output sanitization
+  - role: ["analyst", "senior_analyst", "lead_analyst"]
+    permissions:
+      - tool: database.read_users
+        allow: true
+        conditions:
+          input:
+            limit:
+              type: int
+              min: 1
+              max: 1000
+          output:
+            ssn: {action: filter}
+            salary: {action: filter}
+            email: {action: redact, pattern: "***@***.***"}
+      
+      - tool: analytics.summarize
+        allow: true
+      
+      - tool: reporting.generate
+        allow: true
+    
+    # Sequence rules to prevent exfiltration
+    sequence:
+      - deny: ["database.read_users", "web.http_request"]
+        reason: "Prevent PII exfiltration from database to external endpoints"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 2: Engineering Teams (Using 'roles' plural key)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - roles: ["data_engineer", "ml_engineer", "backend_engineer"]
+    permissions:
+      - database.read_users
+      - database.read_sessions
+      - analytics.aggregate
+      - analytics.transform
+      - ml.predict
+      - file.write
+      - s3.upload
+    
+    sequence:
+      - deny: ["database.read_users", "file.write", "s3.upload"]
+        reason: "Prevent multi-hop data exfiltration via local file + cloud upload"
+      
+      - deny: ["secrets.get_api_key", "web.http_request"]
+        reason: "Prevent credential leakage"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 3: Limited Access Users (Contractors, Interns, Guests)
+  # ═══════════════════════════════════════════════════════════════════════════
+  - role: ["contractor", "intern", "guest"]
+    permissions:
+      - tool: public.api
+        allow: true
+        conditions:
+          input:
+            endpoint:
+              type: string
+              matches: '^https?://(public-api\.example\.com)/.*'
+              required: true
+      
+      - tool: analytics.summarize
+        allow: true
+        conditions:
+          output:
+            # Truncate output to prevent data leakage
+            _all_fields: {action: truncate, max_length: 500}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 4: Single Role (Backwards Compatible)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Admin has wildcard access (no restrictions)
+  - role: admin
+    permissions: ["*"]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 5: Integration Services (Shared Identity)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Multiple service accounts that should have identical permissions
+  - role: ["integration_service_prod", "integration_service_staging", "integration_service_dev"]
+    permissions:
+      - tool: web.http_request
+        allow: true
+        conditions:
+          input:
+            url:
+              type: string
+              matches: '^https?://(api\.partner\.com|webhook\.internal\.com)/.*'
+              required: true
+            method:
+              type: string
+              enum: ["GET", "POST"]
+              required: true
+      
+      - tool: database.write_events
+        allow: true
+        conditions:
+          input:
+            payload:
+              max_bytes: 100000
+              required: true
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Key Takeaways:
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# 1. Multi-role syntax reduces duplication when roles have identical access needs
+# 2. Both 'role' and 'roles' keys are supported ('role' takes precedence)
+# 3. Guardrails (input/output conditions) apply to ALL roles in the list
+# 4. Sequence rules apply to ALL roles in the list
+# 5. Single-role syntax still works (backwards compatible)
+# 6. Mix and match: Some policies can be single-role, others multi-role
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+

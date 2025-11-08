@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 
+from d2.exceptions import ConfigurationError
 from d2.validation.output import OutputValidator
 from d2.validation.base import ValidationResult
 
@@ -459,4 +460,80 @@ def test_validation_multiple_type_options():
     )
 
     assert result.allowed is False
+
+
+# ------------------------------------------------------------------
+# Unknown operator detection (security: catch typos)
+# ------------------------------------------------------------------
+
+
+def test_output_unknown_operator_raises_configuration_error():
+    """Unknown operators should raise ConfigurationError, not silently ignore."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "amount": {"maximum": 10000},  # Typo: should be "max"
+            },
+            {"amount": 5000},
+        )
+    
+    assert "unknown operator" in str(exc_info.value).lower()
+    assert "maximum" in str(exc_info.value)
+
+
+def test_output_typo_in_type_caught():
+    """Typo in 'type' operator should be caught."""
+    with pytest.raises(ConfigurationError):
+        _validate(
+            {
+                "status": {"typ": "string"},  # Typo: should be "type"
+            },
+            {"status": "ok"},
+        )
+
+
+def test_output_multiple_unknown_operators():
+    """Multiple unknown operators should trigger error."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "value": {
+                    "type": "int",
+                    "maximum": 100,     # Unknown
+                    "minimum": 1,       # Unknown
+                },
+            },
+            {"value": 50},
+        )
+    
+    error_msg = str(exc_info.value).lower()
+    assert "unknown operator" in error_msg or "maximum" in error_msg
+
+
+def test_output_valid_operators_still_work():
+    """Valid operators should work without errors."""
+    result = _validate(
+        {
+            "count": {
+                "type": "int",
+                "required": True,
+                "min": 0,
+                "max": 1000,
+            },
+        },
+        {"count": 500},
+    )
+    
+    assert result.allowed is True
+
+
+def test_output_nonexistent_format_operator():
+    """Non-existent 'format' operator should be caught."""
+    with pytest.raises(ConfigurationError):
+        _validate(
+            {
+                "email": {"format": "email"},  # "format" doesn't exist
+            },
+            {"email": "test@example.com"},
+        )
 

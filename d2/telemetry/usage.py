@@ -19,6 +19,7 @@ import uuid
 
 from ..utils import DEFAULT_API_URL, JITTER_FACTOR
 from ..validator import resolve_limits
+from ..context import get_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class UsageReporter:
     ensuring that telemetry issues do not impact the host application.
     """
 
-    def __init__(self, api_token: str, api_url: str = DEFAULT_API_URL, host_id: Optional[str] = None):
+    def __init__(self, api_token: str, api_url: str = DEFAULT_API_URL, host_id: Optional[str] = None, policy_manager=None):
         self._api_token = api_token
         self._endpoint = f"{api_url.rstrip('/')}{EVENTS_ENDPOINT_PATH}"
         
@@ -57,6 +58,15 @@ class UsageReporter:
         self._buffer_lock = threading.Lock()
         
         self._task: Optional[asyncio.Task] = None
+        
+        # Reference to policy manager for automatic context extraction
+        self._policy_manager = policy_manager
+        
+        # Cached policy context (extracted once, reused for all events)
+        self._service_name: Optional[str] = None
+        self._policy_etag: Optional[str] = None
+        self._request_id: Optional[str] = None
+        self._context_extracted = False
 
         # Resolve quotas (cached)
         limits = resolve_limits(self._api_token)
@@ -64,8 +74,8 @@ class UsageReporter:
         self._max_request_bytes: int = int(limits.get("event_payload_max_bytes", 32 * 1024))
         self._event_sample: Dict[str, float] = dict(limits.get("event_sample", {}))
         
-        # Flush interval for analytics
-        self._flush_interval_s = REPORTING_INTERVAL_SECONDS
+        # Flush interval for analytics (plan-controlled with fallback to default)
+        self._flush_interval_s = int(limits.get("event_flush_interval_seconds", REPORTING_INTERVAL_SECONDS))
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -82,14 +92,37 @@ class UsageReporter:
         except Exception:
             # On malformed rates, default to send
             pass
+        
+        # Extract policy context once on first call (lazy initialization)
+        if not self._context_extracted:
+            self._extract_policy_context()
+        
+        # Use cached or explicitly provided context
+        service_name = service_name or self._service_name or "unknown"
+        policy_etag = policy_etag or self._policy_etag
+        
         # Enrich payload with standard analytics fields
         enriched_payload = {
-            "service": service_name or "unknown",
+            "service": service_name,
             "host": self._host,
             "pid": self._pid,
             "flush_interval_s": self._flush_interval_s,
             **event_data  # Original event data
         }
+        
+        # Add user_id from context (unless explicitly provided in event_data)
+        if "user_id" not in enriched_payload:
+            try:
+                user_ctx = get_user_context()
+                if user_ctx and user_ctx.user_id:
+                    enriched_payload["user_id"] = user_ctx.user_id
+            except Exception:
+                # Context may not be set in all scenarios
+                pass
+        
+        # Add request_id for call chain correlation
+        if self._request_id:
+            enriched_payload["request_id"] = self._request_id
         
         # Add policy context if available
         if policy_etag:
@@ -105,85 +138,6 @@ class UsageReporter:
         with self._buffer_lock:
             self._buffer.append(event)
 
-        if len(self._buffer) == self._buffer.maxlen:
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._flush_buffer())
-            except RuntimeError:
-                asyncio.run(self._flush_buffer())
-
-    def emit_event(
-        self,
-        action: str,
-        tool_name: Optional[str] = None,
-        role: Optional[str] = None,
-        **extra_fields: Any,
-    ) -> None:
-        """Record a granular usage event in canonical shape.
-
-        Applies safety limits:
-          * extra_fields must contain max 10 keys.
-          * Serialized JSON size must not exceed 4096 bytes per event.
-        Events violating these rules are dropped with a warning.
-        """
-
-        if len(extra_fields) > 10:
-            logger.warning(
-                "UsageReporter.emit_event dropped event – extra_fields > 10 (got %d).",
-                len(extra_fields),
-            )
-            return
-
-        # Service name should be passed as extra_field from policy bundle
-        service_name = extra_fields.pop("service", "unknown")
-        
-        payload: Dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "action": action,
-            "service": service_name,
-            "host": self._host,
-            "pid": self._pid,
-            "flush_interval_s": self._flush_interval_s,
-        }
-
-        if tool_name is not None:
-            payload["tool_name"] = tool_name
-        if role is not None:
-            payload["role"] = role
-
-        payload.update(extra_fields)
-
-        try:
-            payload_bytes = json.dumps(payload, separators=(",", ":")).encode()
-        except (TypeError, ValueError) as exc:
-            logger.warning("UsageReporter.emit_event dropped event – JSON serialisation failed: %s", exc)
-            return
-
-        if len(payload_bytes) > 4096:
-            logger.warning(
-                "UsageReporter.emit_event dropped event – size %d B exceeds 4 KiB cap.",
-                len(payload_bytes),
-            )
-            return
-
-        # Apply sampling for custom events if provided (keyed by action)
-        try:
-            rate = float(self._event_sample.get(action, 1.0))
-            if rate < 1.0 and random.random() > max(0.0, min(1.0, rate)):
-                return
-        except Exception:
-            pass
-
-        with self._buffer_lock:
-            self._buffer.append(
-                {
-                    "event_type": "custom",
-                    "payload": payload,
-                    "occurred_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-
-        # Size-triggered flush: if buffer is full, send immediately.
         if len(self._buffer) == self._buffer.maxlen:
             try:
                 loop = asyncio.get_running_loop()
@@ -233,8 +187,8 @@ class UsageReporter:
         """The main loop for the background reporting task."""
         while True:
             try:
-                jitter = random.uniform(-REPORTING_INTERVAL_SECONDS * JITTER_FACTOR, REPORTING_INTERVAL_SECONDS * JITTER_FACTOR)
-                sleep_duration = REPORTING_INTERVAL_SECONDS + jitter
+                jitter = random.uniform(-self._flush_interval_s * JITTER_FACTOR, self._flush_interval_s * JITTER_FACTOR)
+                sleep_duration = self._flush_interval_s + jitter
                 await asyncio.sleep(sleep_duration)
                 await self._flush_buffer()
             except asyncio.CancelledError:
@@ -286,9 +240,9 @@ class UsageReporter:
                     if response.status_code == 429:
                         retry_after_raw = response.headers.get("Retry-After")
                         try:
-                            retry_after = int(retry_after_raw) if retry_after_raw else REPORTING_INTERVAL_SECONDS
+                            retry_after = int(retry_after_raw) if retry_after_raw else self._flush_interval_s
                         except (TypeError, ValueError):
-                            retry_after = REPORTING_INTERVAL_SECONDS
+                            retry_after = self._flush_interval_s
                         logger.warning("Events ingest rate-limited (429). Backing off for %ds.", retry_after)
                         await asyncio.sleep(retry_after)
                         continue
@@ -308,6 +262,52 @@ class UsageReporter:
                 logger.error("Failed to send usage data to D2 cloud: %s", e)
             except Exception:
                 logger.exception("An unexpected error occurred while sending usage data.") 
+
+    def _extract_policy_context(self) -> None:
+        """Extract policy context (service_name, policy_etag, request_id) from policy manager.
+        
+        This method is called once (lazily on first track_event call) to extract
+        and cache the policy context. The cached values are then reused for all
+        subsequent events.
+        
+        Why we send policy_etag:
+        - Correlate events with specific policy versions (track behavior changes)
+        - Debug policy rollouts (did issues start after policy update?)
+        - Analytics on policy effectiveness over time
+        - Track which policy was active when security events occurred
+        
+        Why we send request_id:
+        - Correlate all events within a single user request
+        - Reconstruct call chains on the control plane
+        - Track data flows across multiple tool invocations
+        - Enable cross-customer pattern analysis
+        """
+        self._context_extracted = True  # Mark as attempted, even if it fails
+        
+        # Extract policy context from policy manager
+        if self._policy_manager:
+            try:
+                if hasattr(self._policy_manager, "_policy_bundle") and self._policy_manager._policy_bundle:
+                    # Extract policy etag (for version tracking)
+                    self._policy_etag = getattr(self._policy_manager._policy_bundle, "etag", None)
+                    
+                    # Extract service name from policy metadata
+                    metadata = self._policy_manager._policy_bundle.raw_bundle.get("metadata", {})
+                    self._service_name = metadata.get("name", None)
+            except Exception:
+                # Silently fail if policy context extraction fails
+                pass
+        
+        # Extract request_id from current user context
+        try:
+            from ..context import get_user_context
+            ctx = get_user_context()
+            if ctx and ctx.request_id:
+                self._request_id = ctx.request_id
+        except Exception:
+            # Silently fail if context extraction fails
+            # This ensures telemetry never breaks user code
+            pass
 
 # Ensure buffered events are flushed at interpreter exit
 atexit.register(lambda: None) 

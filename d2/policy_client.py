@@ -1,5 +1,10 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 import asyncio
 import logging
+import os
 from typing import Callable, Optional, Awaitable, List
 
 from .policy import PolicyManager
@@ -22,7 +27,6 @@ class PolicyClient:
     ) -> None:
         self._api_url = api_url.rstrip("/")
         self._token = api_token
-        import os
         os.environ["D2_TOKEN"] = api_token
         self._on_update = on_update
         self._base_interval = base_interval

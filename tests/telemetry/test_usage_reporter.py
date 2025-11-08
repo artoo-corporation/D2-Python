@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 """
 Tests for d2.usage_reporter – buffer logic & HTTP send path.
 
@@ -112,4 +116,59 @@ async def test_buffer_overflow_drops_oldest_events_first(monkeypatch, httpx_ok):
     monkeypatch.setattr("httpx.AsyncClient", lambda: _SpyClient())
 
     await reporter._flush_buffer()  # pylint: disable=protected-access
-    assert sent == ["e2", "e3"] 
+    assert sent == ["e2", "e3"]
+
+
+def test_flush_interval_respects_plan_limits(monkeypatch):
+    """
+    GIVEN: Server returns custom event_flush_interval_seconds in plan quotas
+    WHEN: UsageReporter is initialized
+    THEN: Should use the plan-specified flush interval instead of hardcoded default
+    
+    This allows dynamic control of telemetry flush intervals based on customer plan:
+    - Free tier: longer intervals (e.g., 300s) to reduce server load
+    - Paid tier: shorter intervals (e.g., 30s) for real-time analytics
+    - Debug mode: very short intervals (e.g., 5s) for testing
+    """
+    # Mock resolve_limits to return a custom flush interval
+    def mock_resolve_limits(token):
+        return {
+            "max_tools": 100,
+            "event_batch": 1000,
+            "event_flush_interval_seconds": 120,  # 2 minutes instead of default 60s
+            "event_sample": {},
+        }
+    
+    monkeypatch.setattr("d2.telemetry.usage.resolve_limits", mock_resolve_limits)
+    
+    # WHEN: Creating a UsageReporter
+    reporter = UsageReporter(api_token="test-token", api_url="http://test-api")
+    
+    # THEN: Should use the plan-specified interval
+    assert reporter._flush_interval_s == 120  # pylint: disable=protected-access
+
+
+def test_flush_interval_falls_back_to_default_when_not_in_plan(monkeypatch):
+    """
+    GIVEN: Server doesn't return event_flush_interval_seconds in quotas (older server)
+    WHEN: UsageReporter is initialized
+    THEN: Should fall back to the default 60-second interval
+    
+    This ensures backward compatibility with older API versions.
+    """
+    # Mock resolve_limits without the flush interval field
+    def mock_resolve_limits(token):
+        return {
+            "max_tools": 100,
+            "event_batch": 1000,
+            "event_sample": {},
+            # No event_flush_interval_seconds
+        }
+    
+    monkeypatch.setattr("d2.telemetry.usage.resolve_limits", mock_resolve_limits)
+    
+    # WHEN: Creating a UsageReporter
+    reporter = UsageReporter(api_token="test-token", api_url="http://test-api")
+    
+    # THEN: Should fall back to default 60 seconds
+    assert reporter._flush_interval_s == 60  # pylint: disable=protected-access 

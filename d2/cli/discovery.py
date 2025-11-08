@@ -92,10 +92,21 @@ def discover_tools(project_root: Path, *, skip_dirs: Optional[Set[str]] = None) 
                         if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
                             explicit_id = arg0.value
                     if explicit_id:
-                        tools.setdefault(explicit_id, params)
+                        # Merge parameters from multiple definitions (union of all params)
+                        if explicit_id in tools:
+                            # Keep the longer parameter list
+                            if len(params) > len(tools[explicit_id]):
+                                tools[explicit_id] = params
+                        else:
+                            tools[explicit_id] = params
                     else:
                         qual = ".".join(self.class_stack + [node.name]) if self.class_stack else node.name
-                        tools.setdefault(f"{self.module_name}.{qual}", params)
+                        full_id = f"{self.module_name}.{qual}"
+                        if full_id in tools:
+                            if len(params) > len(tools[full_id]):
+                                tools[full_id] = params
+                        else:
+                            tools[full_id] = params
 
         def visit_FunctionDef(self, node: ast.FunctionDef):  # type: ignore[override]
             self._collect(node)
@@ -147,10 +158,17 @@ def discover_tool_ids(project_root: Path, *, skip_dirs: Optional[Set[str]] = Non
 
 
 def collect_condition_argument_names(conditions: Any) -> Set[str]:
+    """Collect parameter names from input conditions only (not output).
+    
+    Output conditions are for sanitization/validation of return values,
+    not function parameters, so they shouldn't be validated against the
+    function signature.
+    """
     keys: Set[str] = set()
 
     if isinstance(conditions, Mapping):
-        input_rules = conditions.get("input", conditions)
+        # Only check "input" section - "output" is for return value processing
+        input_rules = conditions.get("input")
         if isinstance(input_rules, Mapping):
             keys.update(str(k) for k in input_rules.keys())
     elif isinstance(conditions, Sequence) and not isinstance(conditions, (str, bytes, bytearray)):

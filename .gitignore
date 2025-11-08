@@ -200,3 +200,4 @@ cython_debug/
 
 # Miscellaneous
 .DS_Store
+push.sh

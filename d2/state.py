@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 """Persistent local state for D2 SDK.
 
 Stores per-app bundle metadata (ETag, version, last_checked) across Python

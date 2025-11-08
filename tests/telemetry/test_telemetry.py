@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 import asyncio, os, json, inspect
 import types
 import importlib
@@ -10,26 +14,23 @@ os.environ["D2_USAGE_FLUSH_SEC"] = "1"
 from d2.telemetry import UsageReporter
 
 
-def test_emit_event_and_caps(monkeypatch):
+def test_track_event_buffers_correctly(monkeypatch):
+    """Test that track_event properly buffers events."""
     reporter = UsageReporter(api_token="t", api_url="http://example.com")
-    reporter.emit_event("tool_invoked", tool_name="summarizer", role="admin", foo=1, bar=2)
+    
+    # Track a simple event
+    reporter.track_event("tool_invoked", {"tool_id": "summarizer", "role": "admin"})
     assert reporter.get_buffer_size() == 1
-
-    # extra_fields cap (>10) → dropped
-    too_many = {f"k{i}": i for i in range(11)}
-    reporter.emit_event("tool_invoked", **too_many)
-    assert reporter.get_buffer_size() == 1  # unchanged
-
-    # size cap (4 KiB) → dropped
-    big_payload = {"big": "x" * 5000}
-    reporter.emit_event("oversize", **big_payload)
-    assert reporter.get_buffer_size() == 1
+    
+    # Track another event
+    reporter.track_event("authz_decision", {"tool_id": "test", "result": "allowed"})
+    assert reporter.get_buffer_size() == 2
 
 
 def test_shutdown_hook_force_flush(monkeypatch):
     # Use a temporary reporter with very short interval
     reporter = UsageReporter(api_token="t", api_url="http://example.com")
-    reporter.emit_event("just_once")
+    reporter.track_event("test_event", {"data": "test"})
 
     # Monkeypatch httpx.AsyncClient to avoid real network I/O
     import httpx
@@ -71,19 +72,19 @@ def test_usage_metrics_isolation():
 # ---------------------------------------------------------------------------
 
 
-def test_emit_event_host(monkeypatch):
+def test_track_event_host(monkeypatch):
     """Ensure host field defaults to socket.gethostname and can be overridden."""
 
     # Patch gethostname to deterministic value
     monkeypatch.setattr("socket.gethostname", lambda: "test-host")
 
     reporter = UsageReporter(api_token="t")
-    reporter.emit_event("dummy_action")
+    reporter.track_event("test_event", {"action": "test"})
     event = reporter._buffer[-1]  # pylint: disable=protected-access
     assert event.get("payload", {}).get("host") == "test-host"
 
     # Override via constructor
     reporter2 = UsageReporter(api_token="t", host_id="override")
-    reporter2.emit_event("dummy_action")
+    reporter2.track_event("test_event", {"action": "test"})
     event2 = reporter2._buffer[-1]  # pylint: disable=protected-access
     assert event2.get("payload", {}).get("host") == "override" 

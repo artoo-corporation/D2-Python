@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 """d2._crypto – helper for automatic Ed25519 key bootstrap used by `d2 publish`.
 
 This module is *SDK-internal*; it generates a persistent Ed25519 keypair

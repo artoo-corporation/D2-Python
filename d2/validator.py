@@ -39,6 +39,7 @@ def resolve_limits(token: Optional[str]) -> dict:
         "bundle_size_bytes": int(MAX_BUNDLE_SIZE_FREE_MIB * 1024 * 1024),
         "poll_seconds": 60,
         "event_batch": 1000,
+        "event_flush_interval_seconds": 60,  # Default telemetry flush interval
         # Default per-event sampling (server can override via /v1/accounts/me)
         "event_sample": {
             "authz_decision": 1.0,
@@ -72,6 +73,7 @@ def resolve_limits(token: Optional[str]) -> dict:
                 "max_tools": int(q.get("max_tools", defaults["max_tools"])),
                 "event_batch": int(q.get("event_batch", defaults["event_batch"])),
                 "poll_seconds": int(data.get("poll_seconds", defaults["poll_seconds"])),
+                "event_flush_interval_seconds": int(q.get("ingest_interval", defaults["event_flush_interval_seconds"])),
                 "plan": data.get("plan"),
                 "account_id": data.get("account_id"),
                 # Optional: per-event sampling policy controlled by server

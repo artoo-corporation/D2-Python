@@ -1,0 +1,379 @@
+{
+  "metadata": {
+    "name": "defense-in-depth-demo",
+    "description": "Comprehensive security with RBAC + Abstract Sequencing + Guardrails",
+    "expires": "2025-11-08T23:59:59+00:00",
+    "tool_groups": {
+      "sensitive_data": [
+        "database.read_users",
+        "database.read_payments",
+        "database.read_sessions",
+        "database.read_orders",
+        "secrets.get_api_key",
+        "secrets.get_database_creds",
+        "secrets.get_encryption_key",
+        "pii.get_ssn",
+        "pii.get_medical_records"
+      ],
+      "external_io": [
+        "web.http_request",
+        "web.websocket_send",
+        "email.send",
+        "sms.send",
+        "s3.upload",
+        "api.external_call",
+        "slack.post_message",
+        "webhook.trigger"
+      ],
+      "internal_processing": [
+        "analytics.summarize",
+        "analytics.aggregate",
+        "analytics.transform",
+        "ml.predict",
+        "ml.classify",
+        "nlp.extract"
+      ],
+      "filesystem": [
+        "file.read",
+        "file.write",
+        "file.delete",
+        "file.upload_local",
+        "cache.write"
+      ],
+      "public_reporting": [
+        "reporting.generate",
+        "dashboard.update",
+        "metrics.publish"
+      ]
+    }
+  },
+  "policies": [
+    {
+      "role": "analyst",
+      "permissions": [
+        {
+          "tool": "database.read_users",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "limit": {
+                "type": "int",
+                "min": 1,
+                "max": 100
+              }
+            },
+            "output": {
+              "ssn": {
+                "action": "filter"
+              },
+              "salary": {
+                "action": "filter"
+              }
+            }
+          }
+        },
+        {
+          "tool": "database.read_payments",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "user_id": {
+                "type": "int",
+                "min": 1,
+                "required": true
+              }
+            },
+            "output": {
+              "card_number": {
+                "matches": ".*",
+                "action": "redact"
+              },
+              "cvv": {
+                "action": "filter"
+              },
+              "billing_address": {
+                "action": "filter"
+              }
+            }
+          }
+        },
+        {
+          "tool": "database.read_sessions",
+          "allow": true,
+          "conditions": {
+            "output": {
+              "session_token": {
+                "action": "filter"
+              },
+              "ip_address": {
+                "action": "redact"
+              }
+            }
+          }
+        },
+        {
+          "tool": "database.read_orders",
+          "allow": true
+        },
+        {
+          "tool": "secrets.get_api_key",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "service": {
+                "type": "string",
+                "in": ["stripe", "openai", "aws"],
+                "required": true
+              }
+            },
+            "output": {
+              "api_key": {
+                "maxLength": 20,
+                "action": "truncate"
+              }
+            }
+          }
+        },
+        {
+          "tool": "web.http_request",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "url": {
+                "type": "string",
+                "matches": "^https?://(api\\.example\\.com|approved-service\\.com)/.*",
+                "required": true
+              },
+              "data": {
+                "max_bytes": 10000,
+                "required": true,
+                "not_matches": "(?i)(ssn|social.security|\\d{3}-\\d{2}-\\d{4}|card_number|cvv|\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b|salary|billing)"
+              }
+            }
+          }
+        },
+        {
+          "tool": "email.send",
+          "allow": true
+        },
+        {
+          "tool": "slack.post_message",
+          "allow": true
+        },
+        {
+          "tool": "analytics.summarize",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "data": {
+                "max_bytes": 50000,
+                "required": true
+              }
+            }
+          }
+        },
+        {
+          "tool": "analytics.aggregate",
+          "allow": true
+        },
+        {
+          "tool": "ml.predict",
+          "allow": true
+        },
+        {
+          "tool": "file.write",
+          "allow": true
+        },
+        {
+          "tool": "reporting.generate",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "format": {
+                "type": "string",
+                "in": ["json", "csv", "pdf"]
+              }
+            }
+          }
+        },
+        {
+          "tool": "dashboard.update",
+          "allow": true
+        }
+      ],
+      "sequence": [
+        {
+          "deny": ["database.read_users", "web.http_request"],
+          "reason": "Direct exfiltration: User data → Web"
+        },
+        {
+          "deny": ["database.read_users", "email.send"],
+          "reason": "Direct exfiltration: User data → Email"
+        },
+        {
+          "deny": ["database.read_users", "slack.post_message"],
+          "reason": "Direct exfiltration: User data → Slack"
+        },
+        {
+          "deny": ["database.read_payments", "web.http_request"],
+          "reason": "Direct exfiltration: Payment data → Web"
+        },
+        {
+          "deny": ["database.read_payments", "email.send"],
+          "reason": "Direct exfiltration: Payment data → Email"
+        },
+        {
+          "deny": ["database.read_payments", "slack.post_message"],
+          "reason": "Direct exfiltration: Payment data → Slack"
+        },
+        {
+          "deny": ["database.read_sessions", "web.http_request"],
+          "reason": "Direct exfiltration: Session data → Web"
+        },
+        {
+          "deny": ["database.read_orders", "web.http_request"],
+          "reason": "Direct exfiltration: Order data → Web"
+        },
+        {
+          "deny": ["secrets.get_api_key", "web.http_request"],
+          "reason": "Direct exfiltration: Secrets → Web"
+        },
+        {
+          "deny": ["secrets.get_api_key", "email.send"],
+          "reason": "Direct exfiltration: Secrets → Email"
+        },
+        {
+          "deny": ["secrets.get_api_key", "slack.post_message"],
+          "reason": "Direct exfiltration: Secrets → Slack"
+        },
+        {
+          "deny": ["database.read_users", "analytics.summarize", "web.http_request"],
+          "reason": "Transitive exfiltration: Users → Analytics → Web"
+        },
+        {
+          "deny": ["database.read_users", "analytics.summarize", "email.send"],
+          "reason": "Transitive exfiltration: Users → Analytics → Email"
+        },
+        {
+          "deny": ["database.read_users", "ml.predict", "web.http_request"],
+          "reason": "Transitive exfiltration: Users → ML → Web"
+        },
+        {
+          "deny": ["database.read_payments", "analytics.summarize", "web.http_request"],
+          "reason": "Transitive exfiltration: Payments → Analytics → Web"
+        },
+        {
+          "deny": ["database.read_payments", "analytics.aggregate", "web.http_request"],
+          "reason": "Transitive exfiltration: Payments → Analytics → Web"
+        },
+        {
+          "deny": ["secrets.get_api_key", "analytics.summarize", "web.http_request"],
+          "reason": "Transitive exfiltration: Secrets → Analytics → Web"
+        },
+        {
+          "deny": ["secrets.get_api_key", "ml.predict", "email.send"],
+          "reason": "Transitive exfiltration: Secrets → ML → Email"
+        },
+        {
+          "deny": ["database.read_users", "analytics.aggregate", "reporting.generate", "web.http_request"],
+          "reason": "Transitive exfiltration: Users → Analytics → Report → Web (4-hop)"
+        },
+        {
+          "deny": ["database.read_users", "file.write"],
+          "reason": "Local exfiltration: User data → Filesystem"
+        },
+        {
+          "deny": ["database.read_payments", "file.write"],
+          "reason": "Local exfiltration: Payment data → Filesystem"
+        },
+        {
+          "deny": ["secrets.get_api_key", "file.write"],
+          "reason": "Local exfiltration: Secrets → Filesystem"
+        },
+        {
+          "deny": ["database.read_payments", "analytics.summarize"],
+          "reason": "Business rule: Payment data requires specialized analytics only"
+        },
+        {
+          "deny": ["database.read_orders", "ml.predict"],
+          "reason": "Business rule: Order data can't be used for ML training"
+        }
+      ]
+    },
+    {
+      "role": "data_engineer",
+      "permissions": [
+        "database.read_users",
+        "database.read_sessions",
+        "analytics.summarize",
+        "analytics.aggregate",
+        "ml.predict",
+        "file.write",
+        "reporting.generate"
+      ],
+      "sequence": [
+        {
+          "deny": ["database.read_users", "file.write"],
+          "reason": "Data engineer: @sensitive_data → @filesystem blocked"
+        },
+        {
+          "deny": ["database.read_sessions", "file.write"],
+          "reason": "Data engineer: @sensitive_data → @filesystem blocked"
+        }
+      ]
+    },
+    {
+      "role": "integration_service",
+      "permissions": [
+        "web.http_request",
+        "email.send",
+        "analytics.aggregate",
+        "file.read",
+        "reporting.generate"
+      ],
+      "sequence": [
+        {
+          "deny": ["file.read", "web.http_request"],
+          "reason": "Integration service: file.read followed by web.http_request is not allowed"
+        },
+        {
+          "deny": ["file.read", "email.send"],
+          "reason": "Integration service: file.read followed by email.send is not allowed"
+        }
+      ]
+    },
+    {
+      "role": "intern",
+      "permissions": [
+        {
+          "tool": "analytics.summarize",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "data": {
+                "max_bytes": 10000
+              }
+            }
+          }
+        },
+        {
+          "tool": "reporting.generate",
+          "allow": true,
+          "conditions": {
+            "input": {
+              "format": {
+                "type": "string",
+                "in": ["json", "csv"]
+              }
+            }
+          }
+        },
+        "dashboard.update"
+      ]
+    },
+    {
+      "role": "admin",
+      "permissions": ["*"]
+    }
+  ]
+}

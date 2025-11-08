@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 """
 Tests for @d2_guard decorator - RBAC authorization for function calls.
 
@@ -39,6 +43,14 @@ class MockPolicyManagerAllowAll:  # pylint: disable=too-few-public-methods
     async def check_async(self, _tool):  # noqa: D401
         """Always allow access to tools."""
         return True
+    
+    async def get_sequence_rules(self):  # noqa: D401
+        """Return empty sequence rules (no restrictions)."""
+        return []
+    
+    async def get_tool_conditions(self, _tool_id):  # noqa: D401
+        """Return no conditions by default (no guardrails)."""
+        return None
 
 
 class MockPolicyManagerDenyAll(MockPolicyManagerAllowAll):

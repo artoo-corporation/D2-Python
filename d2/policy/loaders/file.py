@@ -106,6 +106,7 @@ class FilePolicyLoader(PolicyLoader):
         default_paths = [
             xdg_config_home / "d2/policy.yaml",
             xdg_config_home / "d2/policy.yml",
+            xdg_config_home / "d2/policy.json",
             Path("policy.yaml"),
             Path("policy.yml"),
             Path("policy.json"),

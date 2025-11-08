@@ -296,7 +296,17 @@ async def diagnose_command(args: argparse.Namespace) -> None:
     for message in warnings:
         logger.error("❌ %s", message)
 
-    tool_count = len({perm for policy in bundle.get("policies", []) for perm in policy.get("permissions", []) if perm != "*"})
+    # Count unique tools (permissions can be strings or dicts with "tool" key)
+    tools = set()
+    for policy in bundle.get("policies", []):
+        for perm in policy.get("permissions", []):
+            if perm == "*":
+                continue
+            if isinstance(perm, str):
+                tools.add(perm)
+            elif isinstance(perm, dict) and "tool" in perm:
+                tools.add(perm["tool"])
+    tool_count = len(tools)
     token = os.getenv("D2_TOKEN")
     limits = resolve_limits(token)
     logger.info("Tools defined: %d / %s", tool_count, limits.get("max_tools", 25))

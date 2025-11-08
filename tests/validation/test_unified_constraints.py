@@ -117,7 +117,7 @@ def test_multiple_field_actions_compose():
     assert result.modified is True
     assert "ssn" not in result.value
     assert result.value["salary"] == "[REDACTED]"
-    assert result.denied is False
+    # Sanitization doesn't deny - denials happen at validation layer
 
 
 def test_field_action_deny_stops_processing():
@@ -219,7 +219,7 @@ def test_field_action_with_no_action_key():
     )
 
     assert result.modified is False
-    assert result.denied is False
+    # Sanitization doesn't deny - denials happen at validation layer
 
 
 # ------------------------------------------------------------------

@@ -1,7 +1,12 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 import re
 
 import pytest
 
+from d2.exceptions import ConfigurationError
 from d2.validation import (
     InputValidator,
     ValidationResult,
@@ -153,5 +158,131 @@ def test_validation_returns_dataclasses_with_str_repr():
     text = repr(result.violations[0])
     assert "argument='table'" in text
     assert "operator='in'" in text
+
+
+# ------------------------------------------------------------------
+# Unknown operator detection (security: catch typos)
+# ------------------------------------------------------------------
+
+
+def test_unknown_operator_raises_configuration_error():
+    """Unknown operators should raise ConfigurationError, not silently ignore."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "limit": {"maximum": 100},  # Typo: should be "max"
+            },
+            {"limit": 50},
+        )
+    
+    assert "unknown operator" in str(exc_info.value).lower()
+    assert "maximum" in str(exc_info.value)
+    assert "limit" in str(exc_info.value)
+
+
+def test_typo_in_operator_name_caught():
+    """Common typos in operator names should be caught."""
+    # Typo: "typ" instead of "type"
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "password": {"typ": "string", "minLength": 8},
+            },
+            {"password": "secret"},
+        )
+    
+    assert "typ" in str(exc_info.value)
+
+
+def test_multiple_unknown_operators_all_reported():
+    """All unknown operators should be reported."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "limit": {
+                    "type": "int",
+                    "maximum": 100,      # Unknown
+                    "minimum": 1,        # Unknown
+                    "greater_than": 0,   # Unknown
+                },
+            },
+            {"limit": 50},
+        )
+    
+    error_msg = str(exc_info.value).lower()
+    # Should mention at least one unknown operator
+    assert "unknown operator" in error_msg or "maximum" in error_msg
+
+
+def test_valid_operators_still_work():
+    """Known operators should work without errors."""
+    # All valid operators - should not raise
+    result = _validate(
+        {
+            "value": {
+                "type": "int",
+                "required": True,
+                "min": 1,
+                "max": 100,
+                "gt": 0,
+                "lt": 101,
+            },
+        },
+        {"value": 50},
+    )
+    
+    assert result.allowed is True
+
+
+def test_common_typo_minlength_caught():
+    """Common typo: minLenght instead of minLength."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "password": {"minLenght": 8},  # Typo: extra 'h'
+            },
+            {"password": "short"},
+        )
+    
+    assert "minlenght" in str(exc_info.value).lower()  # Check lowercase version
+
+
+def test_common_typo_maxlength_caught():
+    """Common typo: maxLenght instead of maxLength."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "comment": {"maxLenght": 100},  # Typo: extra 'h'
+            },
+            {"comment": "Some text"},
+        )
+    
+    assert "maxlenght" in str(exc_info.value).lower()  # Check lowercase version
+
+
+def test_nonexistent_format_operator_caught():
+    """Operators that don't exist should be caught."""
+    with pytest.raises(ConfigurationError):
+        _validate(
+            {
+                "email": {"format": "email"},  # "format" operator doesn't exist
+            },
+            {"email": "test@example.com"},
+        )
+
+
+def test_error_message_suggests_valid_operators():
+    """Error message should list valid operators to help fix typos."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate(
+            {
+                "limit": {"maximum": 100},
+            },
+            {"limit": 50},
+        )
+    
+    error_msg = str(exc_info.value)
+    # Should mention valid operators
+    assert "valid operators" in error_msg.lower() or "available" in error_msg.lower()
 
 

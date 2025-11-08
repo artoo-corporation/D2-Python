@@ -29,15 +29,21 @@ REDACTED_TOKEN = "[REDACTED]"
 @dataclass
 class SanitizationResult:
     """Represents the outcome of applying output sanitization.
-
-    ``denied`` is retained for backward compatibility but will always be ``False``;
-    hard denials now happen during validation before sanitization runs.
+    
+    Hard denials are enforced earlier by OutputValidator.
+    Sanitization only transforms data (filter/redact/truncate).
     """
 
     value: Any
     modified: bool
-    denied: bool = False
-    deny_reason: str | None = None
+    fields_modified: list[str] = None  # Fields that were sanitized
+    actions_applied: dict[str, str] = None  # field_name -> action_type
+    
+    def __post_init__(self):
+        if self.fields_modified is None:
+            self.fields_modified = []
+        if self.actions_applied is None:
+            self.actions_applied = {}
 
 
 class OutputSanitizer:
@@ -57,8 +63,8 @@ class OutputSanitizer:
     Returns SanitizationResult with:
     - value: Transformed output (or original if no actions triggered)
     - modified: Whether any transformations were applied
-    - denied: Whether response should be blocked
-    - deny_reason: Reason if denied
+    - fields_modified: List of field names that were sanitized
+    - actions_applied: Dictionary mapping field names to action types
     
     Example:
         ```python
@@ -72,6 +78,8 @@ class OutputSanitizer:
         )
         # result.value == {"name": "Alice", "salary": "[REDACTED]"}
         # result.modified == True
+        # result.fields_modified == ["ssn", "salary"]
+        # result.actions_applied == {"ssn": "filter", "salary": "redact"}
         ```
     """
 
@@ -105,18 +113,23 @@ class OutputSanitizer:
         if isinstance(policy_conditions, Sequence) and not isinstance(policy_conditions, (str, bytes, bytearray)):
             current = value
             modified = False
+            all_fields_modified: list[str] = []
+            all_actions_applied: dict[str, str] = {}
+            
             for condition in policy_conditions:
                 result = self.sanitize(condition, current)
-                if result.denied:
-                    return SanitizationResult(
-                        value=result.value,
-                        modified=modified or result.modified,
-                        denied=True,
-                        deny_reason=result.deny_reason,
-                    )
                 current = result.value
                 modified = modified or result.modified
-            return SanitizationResult(value=current, modified=modified)
+                if result.modified:
+                    all_fields_modified.extend(result.fields_modified)
+                    all_actions_applied.update(result.actions_applied)
+            
+            return SanitizationResult(
+                value=current, 
+                modified=modified,
+                fields_modified=all_fields_modified,
+                actions_applied=all_actions_applied
+            )
 
         if isinstance(policy_conditions, Mapping):
             if "output" in policy_conditions:
@@ -133,14 +146,24 @@ class OutputSanitizer:
 
         current = value
         modified = False
+        fields_modified: list[str] = []
+        actions_applied: dict[str, str] = {}
 
         # Apply field-level actions
         field_rules = self._extract_field_rules(rules)
         if field_rules:
-            current, changed = self._apply_field_rules(current, field_rules)
+            current, changed, fields, actions = self._apply_field_rules(current, field_rules)
             modified = modified or changed
+            if changed:
+                fields_modified.extend(fields)
+                actions_applied.update(actions)
 
-        return SanitizationResult(value=current, modified=modified)
+        return SanitizationResult(
+            value=current, 
+            modified=modified,
+            fields_modified=fields_modified,
+            actions_applied=actions_applied
+        )
 
     # ------------------------------------------------------------------
     # Field transformation helpers
@@ -346,12 +369,19 @@ class OutputSanitizer:
         self,
         value: Any,
         field_rules: Mapping[str, Mapping[str, Any]],
-    ) -> Tuple[Any, bool]:
+    ) -> Tuple[Any, bool, list[str], dict[str, str]]:
+        """Apply field-level sanitization rules and track what was modified.
+        
+        Returns:
+            Tuple of (modified_value, was_modified, fields_modified, actions_applied)
+        """
         if not field_rules:
-            return value, False
+            return value, False, [], {}
 
         current = value
         modified = False
+        fields_modified: list[str] = []
+        actions_applied: dict[str, str] = {}
 
         for field, rule in field_rules.items():
             action = (rule.get("action") or "").lower()
@@ -365,7 +395,10 @@ class OutputSanitizer:
 
             if action == "filter":
                 current, changed = self._filter_fields(current, [field])
-                modified = modified or changed
+                if changed:
+                    modified = True
+                    fields_modified.append(field)
+                    actions_applied[field] = "filter"
                 continue
 
             if action == "redact":
@@ -373,19 +406,28 @@ class OutputSanitizer:
                 if "matches" in rule:
                     # Pattern-based: substitute matching portions
                     current, changed = self._redact_field_pattern(current, field, rule["matches"])
-                    modified = modified or changed
+                    if changed:
+                        modified = True
+                        fields_modified.append(field)
+                        actions_applied[field] = "redact_pattern"
                 else:
                     # Field-based: redact entire field value
                     current, changed = self._redact_fields(current, [field])
-                    modified = modified or changed
+                    if changed:
+                        modified = True
+                        fields_modified.append(field)
+                        actions_applied[field] = "redact"
                 continue
 
             if action == "truncate":
                 current, changed = self._truncate_field(current, field, rule)
-                modified = modified or changed
+                if changed:
+                    modified = True
+                    fields_modified.append(field)
+                    actions_applied[field] = "truncate"
                 continue
 
-        return current, modified
+        return current, modified, fields_modified, actions_applied
 
     def _should_trigger_field(
         self,

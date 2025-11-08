@@ -1,3 +1,7 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
 """Shared constraint evaluation utilities for declarative rules."""
 
 from __future__ import annotations
@@ -64,9 +68,33 @@ class ConstraintEvaluator:
         Returns:
             ConstraintEvaluation containing the ValidationResult and whether
             type validation failed (used for short-circuiting additional checks).
+            
+        Raises:
+            ConfigurationError: If rules contain unknown operators.
         """
+        from ..exceptions import ConfigurationError
 
         allowed_ops = set(operators) if operators is not None else None
+        
+        # Validate all operators are known before evaluation (security: catch typos)
+        unknown_ops = []
+        for operator in rules.keys():
+            # Skip if restricted by whitelist
+            if allowed_ops is not None and operator not in allowed_ops:
+                continue
+            # Check if operator exists
+            if operator not in self._operator_set:
+                handler = getattr(self, f"_check_{operator}", None)
+                if handler is None:
+                    unknown_ops.append(operator)
+        
+        if unknown_ops:
+            valid_ops = ", ".join(sorted(self._ORDERED_OPERATORS))
+            raise ConfigurationError(
+                f"Unknown operator(s) for argument '{context.argument}': {', '.join(sorted(unknown_ops))}. "
+                f"Valid operators: {valid_ops}"
+            )
+
         violations: list[ValidationViolation] = []
 
         type_failed = False
@@ -84,20 +112,6 @@ class ConstraintEvaluator:
                 if operator == "type":
                     type_failed = True
                     break
-
-        # Evaluate any custom operators defined outside the ordered list.
-        if allowed_ops is None or any(op not in self._operator_set for op in rules.keys()):
-            for operator, expected in rules.items():
-                if operator in self._operator_set:
-                    continue
-                if allowed_ops is not None and operator not in allowed_ops:
-                    continue
-                handler = getattr(self, f"_check_{operator}", None)
-                if handler is None:
-                    continue
-                violation = handler(expected, value_present, value, context)
-                if violation is not None:
-                    violations.append(violation)
 
         return ConstraintEvaluation(
             result=ValidationResult(allowed=not violations, violations=violations),

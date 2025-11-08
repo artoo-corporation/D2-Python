@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import time
+
 from .runtime import meter
 
 authz_decision_total = meter.create_counter(
@@ -134,59 +136,91 @@ sync_in_async_denied_total = meter.create_counter(
     unit="1",
 )
 
+# ==============================================================================
+# Security & Threat Detection Metrics
+# ==============================================================================
+
+sequence_pattern_blocked_total = meter.create_counter(
+    name="d2.sequence.pattern.blocked.total",
+    description="Counts blocked sequence patterns with detailed pattern classification.",
+    unit="1",
+)
+
+sensitive_data_access_total = meter.create_counter(
+    name="d2.sensitive_data.access.total",
+    description="Tracks access to sensitive data sources (tools in @sensitive_data group).",
+    unit="1",
+)
+
+call_chain_depth_histogram = meter.create_histogram(
+    name="d2.call_chain.depth",
+    description="Distribution of call chain lengths within a request.",
+    unit="1",
+)
+
+user_violation_attempts_total = meter.create_counter(
+    name="d2.user.violation_attempts.total",
+    description="Counts policy violation attempts by user/agent for insider threat detection.",
+    unit="1",
+)
 
 # ==============================================================================
-# Tool Execution Metrics Recording
+# Operations & Performance Metrics
 # ==============================================================================
 
+guardrail_latency_ms = meter.create_histogram(
+    name="d2.guardrail.latency.ms",
+    description="Time spent in guardrail processing (input validation, output sanitization, sequence checks).",
+    unit="ms",
+)
 
-def record_tool_metrics(manager, tool_id: str, status: str, started_at: float) -> None:
-    """Record execution metrics and emit usage telemetry for a tool invocation.
-    
-    This function records:
-    - OpenTelemetry metrics (latency histogram + invocation counter)
-    - Usage telemetry events (if usage reporter is configured)
-    
-    Args:
-        manager: Policy manager instance (may have _usage_reporter)
-        tool_id: Tool identifier
-        status: Execution status ("allowed", "denied", etc.)
-        started_at: Timestamp from time.perf_counter() when execution started
-    """
-    import time
-    
-    duration_ms = (time.perf_counter() - started_at) * 1000.0
-    tool_exec_latency_ms.record(duration_ms, {"tool_id": tool_id, "status": status})
-    tool_invocation_total.add(1, {"tool_id": tool_id, "status": status})
+policy_cache_hits_total = meter.create_counter(
+    name="d2.policy.cache.hits.total",
+    description="Policy decision cache hit/miss tracking for performance monitoring.",
+    unit="1",
+)
 
-    try:
-        reporter = getattr(manager, "_usage_reporter", None)
-        if reporter:
-            policy_etag = None
-            service_name = "unknown"
+tool_cooccurrence_total = meter.create_counter(
+    name="d2.tool.cooccurrence.total",
+    description="Tracks which tools are called together within time windows.",
+    unit="1",
+)
 
-            if hasattr(manager, "_policy_bundle") and manager._policy_bundle:
-                policy_etag = getattr(manager._policy_bundle, "etag", None)
-                metadata = manager._policy_bundle.raw_bundle.get("metadata", {})
-                service_name = metadata.get("name", "unknown")
+# ==============================================================================
+# Business & Product Metrics
+# ==============================================================================
 
-            reporter.track_event(
-                "tool_invoked",
-                {
-                    "tool_id": tool_id,
-                    "decision": status,
-                    "resource": tool_id,
-                    "latency_ms": duration_ms,
-                },
-                policy_etag=policy_etag,
-                service_name=service_name,
-            )
-    except Exception:
-        # Telemetry must never interfere with user code
-        pass
+feature_usage_total = meter.create_counter(
+    name="d2.feature.usage.total",
+    description="Tracks adoption and usage of D2 features.",
+    unit="1",
+)
+
+policy_complexity_score = meter.create_up_down_counter(
+    name="d2.policy.complexity.score",
+    description="Policy complexity metrics (number of rules, tools, roles, etc.).",
+    unit="1",
+)
+
+tool_cost_units_total = meter.create_counter(
+    name="d2.tool.cost_units.total",
+    description="Cost attribution for tool invocations (API credits, compute, etc.).",
+    unit="1",
+)
+
+# ==============================================================================
+# Compliance & Audit Metrics
+# ==============================================================================
+
+data_flow_event_total = meter.create_counter(
+    name="d2.data_flow.event.total",
+    description="Audit trail of data flows between tools for compliance.",
+    unit="1",
+)
 
 
 __all__ = [
+    # Existing metrics
     "authz_decision_total",
     "missing_policy_total",
     "policy_poll_total",
@@ -208,5 +242,19 @@ __all__ = [
     "context_leak_total",
     "context_stale_total",
     "sync_in_async_denied_total",
-    "record_tool_metrics",
+    # New security & threat detection metrics
+    "sequence_pattern_blocked_total",
+    "sensitive_data_access_total",
+    "call_chain_depth_histogram",
+    "user_violation_attempts_total",
+    # New operations & performance metrics
+    "guardrail_latency_ms",
+    "policy_cache_hits_total",
+    "tool_cooccurrence_total",
+    # New business & product metrics
+    "feature_usage_total",
+    "policy_complexity_score",
+    "tool_cost_units_total",
+    # New compliance & audit metrics
+    "data_flow_event_total",
 ]

@@ -13,8 +13,10 @@ from typing import Any, Mapping, Optional, Sequence
 from ..exceptions import ConfigurationError, PermissionDeniedError
 from ..telemetry.metrics import (
     authz_denied_reason_total,
-    record_tool_metrics,
     tool_invocation_total,
+    guardrail_latency_ms,
+    feature_usage_total,
+    user_violation_attempts_total,
 )
 from .input_validation import get_input_validator, format_validation_reason
 
@@ -52,6 +54,9 @@ async def validate_inputs(
     has_var_kwargs: bool = False,
 ) -> Optional[PermissionDeniedError]:
     """Run declarative input validation and emit telemetry on failure."""
+    
+    # Track guardrail latency
+    validation_start = time.perf_counter()
 
     get_conditions = getattr(manager, "get_tool_conditions", None)
     if not callable(get_conditions):
@@ -64,6 +69,12 @@ async def validate_inputs(
 
     if not conditions:
         return None
+    
+    # Track feature usage
+    try:
+        feature_usage_total.add(1, {"feature": "input_validation", "enabled": "true"})
+    except Exception:
+        pass
 
     if allowed_params is not None:
         condition_keys = _collect_condition_keys(conditions)
@@ -83,6 +94,31 @@ async def validate_inputs(
             )
 
     validation = get_input_validator().validate(conditions, dict(arguments))
+    
+    # Record guardrail latency (OTEL metric)
+    validation_duration_ms = (time.perf_counter() - validation_start) * 1000.0
+    guardrail_latency_ms.record(validation_duration_ms, {
+        "type": "input_validation",
+        "tool_id": tool_id,
+        "result": "allowed" if validation.allowed else "denied"
+    })
+    
+    # Send to D2 cloud for performance analytics
+    try:
+        reporter = getattr(manager, "_usage_reporter", None)
+        if reporter:
+            reporter.track_event(
+                "guardrail_overhead",
+                {
+                    "tool_id": tool_id,
+                    "guardrail_type": "input_validation",
+                    "overhead_ms": validation_duration_ms,
+                    "result": "allowed" if validation.allowed else "denied",
+                }
+            )
+    except Exception:
+        pass
+    
     if validation.allowed:
         return None
 
@@ -96,12 +132,26 @@ async def validate_inputs(
 
     tool_invocation_total.add(1, {"tool_id": tool_id, "status": "denied"})
     try:
+        # OTEL metrics for observability
         authz_denied_reason_total.add(1, {"reason": "input_validation", "mode": manager.mode})
+        user_violation_attempts_total.add(1, {
+            "user_id": user_context.user_id if user_context else "unknown",
+            "violation_type": "input_validation",
+        })
+        
+        # D2 cloud event for security analytics
         reporter = getattr(manager, "_usage_reporter", None)
         if reporter:
             reporter.track_event(
-                "denied_reason",
-                {"tool_id": tool_id, "reason": "input_validation"},
+                "authz_decision",
+                {
+                    "tool_id": tool_id,
+                    "result": "denied",
+                    "reason": "input_validation_failed",
+                    "mode": manager.mode,
+                    "violation_count": len(validation.violations),
+                    "violations": [v.message for v in validation.violations],
+                },
             )
     except Exception:
         pass
@@ -110,6 +160,5 @@ async def validate_inputs(
 
 
 __all__ = [
-    "record_tool_metrics",
     "validate_inputs",
 ]

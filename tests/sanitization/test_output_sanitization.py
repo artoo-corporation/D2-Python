@@ -145,7 +145,6 @@ def test_sanitize_ignore_deny_action():
         {"forbidden": "value", "allowed": "data"},
     )
 
-    assert result.denied is False
     assert result.modified is False
     assert result.value == {"forbidden": "value", "allowed": "data"}
 
@@ -161,7 +160,6 @@ def test_sanitize_ignore_global_denials():
         {"pii_flag": True, "data": "secret payload"},
     )
 
-    assert result.denied is False
     assert result.modified is False
     assert result.value == {"pii_flag": True, "data": "secret payload"}
 
@@ -321,4 +319,145 @@ def test_sanitize_transforms_validation_denies():
     # This is tested implicitly by the conditional action tests above
     # Just documenting the key conceptual difference
     pass
+
+
+# ------------------------------------------------------------------
+# Tracking metadata (telemetry support)
+# ------------------------------------------------------------------
+
+
+def test_sanitize_tracks_fields_modified():
+    """SanitizationResult should track which fields were modified."""
+    result = _sanitize(
+        {
+            "ssn": {"action": "filter"},
+            "salary": {"action": "redact"},
+        },
+        {"name": "Alice", "ssn": "123-45-6789", "salary": 150000},
+    )
+
+    assert result.modified is True
+    assert "ssn" in result.fields_modified
+    assert "salary" in result.fields_modified
+    assert len(result.fields_modified) == 2
+
+
+def test_sanitize_tracks_actions_applied():
+    """SanitizationResult should track which actions were applied to each field."""
+    result = _sanitize(
+        {
+            "ssn": {"action": "filter"},
+            "password": {"action": "redact"},
+            "items": {"maxLength": 2, "action": "truncate"},
+        },
+        {
+            "name": "Alice",
+            "ssn": "123-45-6789",
+            "password": "secret",
+            "items": [1, 2, 3, 4],
+        },
+    )
+
+    assert result.modified is True
+    assert result.actions_applied["ssn"] == "filter"
+    assert result.actions_applied["password"] == "redact"
+    assert result.actions_applied["items"] == "truncate"
+    assert len(result.actions_applied) == 3
+
+
+def test_sanitize_pattern_redact_tracks_action_type():
+    """Pattern-based redaction should be tracked as 'redact_pattern'."""
+    result = _sanitize(
+        {
+            "notes": {"matches": r"\d{3}-\d{2}-\d{4}", "action": "redact"},
+        },
+        {"notes": "SSN is 123-45-6789 here"},
+    )
+
+    assert result.modified is True
+    assert result.actions_applied["notes"] == "redact_pattern"
+
+
+def test_sanitize_no_modifications_empty_tracking():
+    """When nothing is modified, tracking metadata should be empty."""
+    result = _sanitize(
+        {
+            "score": {"max": 100, "action": "filter"},  # Conditional - won't trigger
+        },
+        {"score": 50},
+    )
+
+    assert result.modified is False
+    assert result.fields_modified == []
+    assert result.actions_applied == {}
+
+
+def test_sanitize_conditional_actions_only_track_when_triggered():
+    """Conditional actions should only be tracked when they actually trigger."""
+    # High salary - should trigger
+    result = _sanitize(
+        {
+            "salary": {"max": 100000, "action": "redact"},
+        },
+        {"name": "Alice", "salary": 250000},
+    )
+
+    assert result.modified is True
+    assert "salary" in result.fields_modified
+    assert result.actions_applied["salary"] == "redact"
+
+    # Low salary - should NOT trigger
+    result = _sanitize(
+        {
+            "salary": {"max": 100000, "action": "redact"},
+        },
+        {"name": "Bob", "salary": 75000},
+    )
+
+    assert result.modified is False
+    assert result.fields_modified == []
+    assert result.actions_applied == {}
+
+
+def test_sanitize_multiple_conditions_aggregates_tracking():
+    """When using multiple condition sets (list), tracking should aggregate."""
+    # Using list of conditions (sequential application)
+    sanitizer = OutputSanitizer()
+    result = sanitizer.sanitize(
+        [
+            {"output": {"ssn": {"action": "filter"}}},
+            {"output": {"salary": {"max": 100000, "action": "redact"}}},
+        ],
+        {"name": "Alice", "ssn": "123-45-6789", "salary": 150000},
+    )
+
+    assert result.modified is True
+    assert "ssn" in result.fields_modified
+    assert "salary" in result.fields_modified
+    assert result.actions_applied["ssn"] == "filter"
+    assert result.actions_applied["salary"] == "redact"
+
+
+def test_sanitize_tracking_with_nested_fields():
+    """Tracking should work with nested field sanitization."""
+    result = _sanitize(
+        {
+            "password": {"action": "filter"},  # Nested password fields
+            "api_key": {"action": "redact"},
+        },
+        {
+            "user": {
+                "name": "Alice",
+                "password": "secret123",
+            },
+            "credentials": {
+                "api_key": "sk_live_abc123",
+            },
+        },
+    )
+
+    # Both fields should be tracked even though they're nested
+    assert result.modified is True
+    assert "password" in result.fields_modified
+    assert "api_key" in result.fields_modified
 

@@ -87,7 +87,7 @@ class PolicyManager:
                 jwks_thumbprint=pin_jwks_thumbprints
             )
             if get_telemetry_mode() in (TelemetryMode.USAGE, TelemetryMode.ALL):
-                self._usage_reporter = UsageReporter(api_token=token, api_url=api_url)
+                self._usage_reporter = UsageReporter(api_token=token, api_url=api_url, policy_manager=self)
             else:
                 logger.info(
                     "Telemetry mode '%s' – raw usage events disabled.",
@@ -165,6 +165,28 @@ class PolicyManager:
                 # Record latency
                 load_latency_ms = (time.perf_counter() - start_ts) * 1000
                 policy_load_latency_ms.record(load_latency_ms, {"mode": self.mode})
+                
+                # Send to D2 cloud
+                try:
+                    if self._usage_reporter:
+                        # Calculate policy complexity
+                        tool_count = len(self._policy_bundle.tool_to_roles)
+                        role_count = len(set(role for roles in self._policy_bundle.tool_to_roles.values() for role in roles))
+                        sequence_rule_count = sum(len(rules) for rules in self._policy_bundle.role_to_sequences.values())
+                        
+                        self._usage_reporter.track_event(
+                            "policy_loaded",
+                            {
+                                "mode": self.mode,
+                                "load_latency_ms": load_latency_ms,
+                                "tool_count": tool_count,
+                                "role_count": role_count,
+                                "sequence_rule_count": sequence_rule_count,
+                                "policy_etag": self._policy_bundle.etag,
+                            }
+                        )
+                except Exception:
+                    pass
 
                 # ------------------------------------------------------------------
                 # Usage Telemetry – policy_updated
@@ -195,6 +217,21 @@ class PolicyManager:
                 span.set_status(Status(StatusCode.ERROR), description=str(e))
                 # Record failure latency as well
                 policy_load_latency_ms.record((time.perf_counter() - start_ts) * 1000, {"mode": self.mode, "error": "1"})
+                
+                # Send to D2 cloud
+                try:
+                    if self._usage_reporter:
+                        self._usage_reporter.track_event(
+                            "policy_load_failed",
+                            {
+                                "mode": self.mode,
+                                "error_type": type(e).__name__,
+                                "error_message": str(e),
+                                "latency_ms": (time.perf_counter() - start_ts) * 1000,
+                            }
+                        )
+                except Exception:
+                    pass
 
 
     async def _verify_signature(self, bundle: Dict[str, Any]):
@@ -267,6 +304,17 @@ class PolicyManager:
                     logging.getLogger(__name__).error(
                         "JWKS key thumbprint '%s' not in pinned set. Rejecting bundle.", thumbprint
                     )
+                    # Send to D2 cloud
+                    reporter = getattr(self, "_usage_reporter", None)
+                    if reporter:
+                        reporter.track_event(
+                            "policy_verification_failed",
+                            {
+                                "reason": "thumbprint_mismatch",
+                                "thumbprint": thumbprint,
+                                "pinned_thumbprints": list(self._jwks_thumbprints),
+                            }
+                        )
                     raise InvalidSignatureError(
                         f"JWKS key thumbprint '{thumbprint}' not in pinned set."
                     )
@@ -314,6 +362,16 @@ class PolicyManager:
                     raise InvalidSignatureError(f"Failed to extract policy from JWT payload: {exc}") from exc
 
         except jwt.PyJWTError as e:
+            # Send to D2 cloud
+            reporter = getattr(self, "_usage_reporter", None)
+            if reporter:
+                reporter.track_event(
+                    "policy_verification_failed",
+                    {
+                        "reason": "jwt_signature_invalid",
+                        "error": str(e),
+                    }
+                )
             raise InvalidSignatureError(f"JWT signature validation failed: {e}") from e
 
 
@@ -322,7 +380,6 @@ class PolicyManager:
         if not self._jwks_cache or not self._jwks_thumbprints:
             return
         try:
-            import time
             start = time.perf_counter()
             logger.debug("Validating JWKS thumbprints...")
             await self._jwks_cache.get_jwks()
@@ -426,33 +483,25 @@ class PolicyManager:
 
             # Internal usage reporting (for D2)
             if self._usage_reporter:
-                # Include decision_ms for raw usage analytics parity with metrics
-                self._usage_reporter.track_event(
-                    "authz_decision",
-                    {
-                        "tool_id": tool_id,
-                        "result": result,
-                        "user_id": user_context.user_id if user_context else None,
-                        "decision_ms": duration_ms,
-                        "mode": self.mode,
-                    },
-                )
+                # Consolidated authz decision event
+                event_data = {
+                    "tool_id": tool_id,
+                    "result": result,
+                    "decision_ms": duration_ms,
+                    "mode": self.mode,
+                }
+                
+                # Add reason field for denials
+                if not is_allowed:
+                    event_data["reason"] = "role_mismatch"
+                
+                self._usage_reporter.track_event("authz_decision", event_data)
 
             if is_allowed:
                 span.set_status(Status(StatusCode.OK))
             else:
-                # Tag denied reason (simple heuristic)
+                # Tag denied reason for OTEL metrics
                 authz_denied_reason_total.add(1, {"reason": "role_mismatch", "mode": self.mode})
-
-                if self._usage_reporter:
-                    self._usage_reporter.track_event(
-                        "denied_reason",
-                        {
-                            "tool_id": tool_id,
-                            "reason": "role_mismatch",
-                            "user_id": user_context.user_id if user_context else None,
-                        },
-                    )
             
             return is_allowed
 
@@ -489,6 +538,39 @@ class PolicyManager:
             return applicable[0]
 
         return applicable
+
+    async def get_sequence_rules(self) -> List[Dict[str, Any]]:
+        """Retrieve sequence rules for the current user's roles.
+        
+        Returns:
+            List of sequence rule dictionaries (deny patterns with reasons)
+            
+        Example:
+            [
+                {"deny": ["database.read", "web.request"], "reason": "Exfiltration"},
+                {"deny": ["secrets.get", "web.request"], "reason": "Secret leak"}
+            ]
+        """
+        await self._init_complete.wait()
+        bundle = self._get_bundle()
+        user_context = get_user_context()
+
+        if user_context is None or not user_context.roles:
+            return []
+
+        user_roles = set(user_context.roles)
+        
+        # Admin wildcard role bypasses sequence enforcement
+        if "*" in user_roles:
+            return []
+
+        # Collect all sequence rules for user's roles
+        all_rules: List[Dict[str, Any]] = []
+        for role in user_roles:
+            role_rules = bundle.role_to_sequences.get(role, [])
+            all_rules.extend(role_rules)
+
+        return all_rules
 
     async def is_tool_in_policy_async(self, tool_id: str) -> bool:
         """Async: Checks if a tool ID is defined in the policy at all."""
@@ -630,7 +712,6 @@ def configure_rbac_sync(
     awaits :pyfunc:`configure_rbac`. It is safe to call from global scope or
     from ``if __name__ == "__main__"`` blocks.
     """
-    import anyio
 
     return anyio.run(
         configure_rbac,

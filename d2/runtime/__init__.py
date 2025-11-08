@@ -11,12 +11,10 @@ from .output_filter import (
     get_output_validator,
     get_output_sanitizer,
 )
-from ..telemetry.metrics import record_tool_metrics
 
 __all__ = [
     "format_validation_reason",
     "get_input_validator",
-    "record_tool_metrics",
     "validate_inputs",
     "apply_output_filters",
     "get_output_validator",
