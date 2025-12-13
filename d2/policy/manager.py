@@ -70,6 +70,9 @@ class PolicyManager:
         self._jwks_thumbprints = set(pin_jwks_thumbprints) if pin_jwks_thumbprints else None
         self._init_complete = asyncio.Event()
         self._usage_reporter: Optional[UsageReporter] = None
+        # Store reference to the main event loop for cross-thread scheduling
+        # (e.g., file watcher callbacks run in a separate thread)
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
 
         token = os.getenv("D2_TOKEN")
         jwks_url = jwks_url or os.getenv("D2_JWKS_URL")
@@ -107,6 +110,10 @@ class PolicyManager:
         self._init_task = asyncio.create_task(self._initialize_internal())
 
     async def _initialize_internal(self):
+        # Capture the main event loop for cross-thread scheduling
+        # (file watcher callbacks run in a separate thread)
+        self._main_loop = asyncio.get_running_loop()
+        
         if self.mode == "cloud":
             # Pre-fetch the JWKS keys to validate thumbprints early
             await self._validate_jwks_thumbprints()
@@ -133,13 +140,46 @@ class PolicyManager:
         self._schedule_policy_update()
 
     def _schedule_policy_update(self):
-        """Callback to trigger a policy reload in the background."""
+        """Callback to trigger a policy reload in the background.
+        
+        This method is called from various contexts:
+        1. From the polling listener (same event loop) - uses create_task
+        2. From file watcher callback (different thread) - uses run_coroutine_threadsafe
+        3. From sync applications (no event loop) - logs warning
+        
+        Note: In sync-only applications (Flask, Django without async), policy
+        hot-reload via file watcher will be skipped since there's no event loop.
+        Restart the application to pick up policy changes in sync mode.
+        """
+        # First, try to schedule in the current thread's event loop
         try:
             loop = asyncio.get_running_loop()
-            # Create task instead of using run_coroutine_threadsafe for better error handling
+            # Same thread as event loop - use create_task
             asyncio.create_task(self._load_and_verify_policy())
+            return
         except RuntimeError:
-            logger.debug("No running event loop, skipping policy update.")
+            pass  # No loop in this thread, try cross-thread scheduling
+        
+        # Try cross-thread scheduling using the main loop captured during init
+        if self._main_loop is not None and self._main_loop.is_running():
+            try:
+                # Schedule from a different thread (e.g., file watcher callback)
+                future = asyncio.run_coroutine_threadsafe(
+                    self._load_and_verify_policy(),
+                    self._main_loop
+                )
+                # Don't wait for result - this is fire-and-forget
+                logger.debug("Scheduled policy reload via cross-thread scheduling.")
+                return
+            except RuntimeError as e:
+                logger.debug("Cross-thread scheduling failed: %s", e)
+        
+        # No event loop available anywhere - sync-only application
+        logger.warning(
+            "Policy update skipped - no event loop available. "
+            "In sync applications, restart to pick up policy changes. "
+            "Consider using an async framework or configure_rbac_async() for hot-reload support."
+        )
 
 
     async def _load_and_verify_policy(self):
@@ -595,7 +635,15 @@ class PolicyManager:
 
     def is_tool_in_policy(self, tool_id: str) -> bool:
         """Sync: Checks if a tool ID is defined in the policy at all."""
-        return anyio.from_thread.run(self.is_tool_in_policy_async, tool_id)
+        try:
+            # Check if we're in an async context
+            asyncio.get_running_loop()
+            raise ConfigurationError(
+                "Cannot call sync method from async context. Use is_tool_in_policy_async() instead."
+            )
+        except RuntimeError:
+            # No event loop running, safe to use anyio.run
+            return anyio.run(self.is_tool_in_policy_async, tool_id)
 
     def _print_startup_banner(self):
         if os.getenv("D2_SILENT", "0").lower() in ("1", "true"):

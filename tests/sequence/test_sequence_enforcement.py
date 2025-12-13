@@ -300,3 +300,87 @@ class TestSequenceIntegrationScenarios:
         assert "Transitive" in error.reason
 
 
+class TestSequenceValidatorUserIdentity:
+    """Tests for user identity propagation in sequence denial errors.
+    
+    When a sequence violation occurs, the PermissionDeniedError should include
+    the actual user's identity (from context) for proper audit logging and
+    incident response. Using a generic placeholder obscures who triggered
+    the denial.
+    """
+
+    def test_denial_error_includes_real_user_id_from_context(self):
+        """
+        GIVEN: A user with specific identity triggers a sequence violation
+        WHEN: SequenceValidator returns a PermissionDeniedError
+        THEN: The error should include the real user_id from context
+        
+        BUG: Original implementation used user_id="(sequence_context)" placeholder,
+        which obscures the actual caller's identity in audit logs.
+        """
+        from d2.context import set_user_context, clear_user_context
+        
+        validator = SequenceValidator()
+        rules = [{"deny": ["database.read", "web.request"], "reason": "Exfiltration"}]
+        
+        # GIVEN: Alice triggers a sequence violation
+        with set_user_context(user_id="alice", roles=["analyst"]):
+            error = validator.validate_sequence(
+                current_history=("database.read",),
+                next_tool_id="web.request",
+                sequence_rules=rules
+            )
+        
+        # THEN: Error should contain Alice's user_id, not a placeholder
+        assert error is not None
+        assert error.user_id == "alice", \
+            f"Expected user_id='alice', got '{error.user_id}'. " \
+            "Denial errors should include the real user for audit logging."
+
+    def test_denial_error_includes_real_roles_from_context(self):
+        """
+        GIVEN: A user with specific roles triggers a sequence violation
+        WHEN: SequenceValidator returns a PermissionDeniedError  
+        THEN: The error should include the user's actual roles
+        """
+        from d2.context import set_user_context, clear_user_context
+        
+        validator = SequenceValidator()
+        rules = [{"deny": ["secrets.read", "web.request"], "reason": "Leak"}]
+        
+        with set_user_context(user_id="bob", roles=["developer", "secrets-reader"]):
+            error = validator.validate_sequence(
+                current_history=("secrets.read",),
+                next_tool_id="web.request",
+                sequence_rules=rules
+            )
+        
+        assert error is not None
+        assert "developer" in error.roles or error.roles == ["developer", "secrets-reader"], \
+            f"Expected roles from context, got '{error.roles}'"
+
+    def test_denial_error_handles_missing_context_gracefully(self):
+        """
+        GIVEN: No user context is set (edge case / bug in calling code)
+        WHEN: A sequence violation occurs
+        THEN: Should still return error with sensible fallback, not crash
+        """
+        from d2.context import clear_user_context
+        
+        clear_user_context()  # Ensure no context set
+        
+        validator = SequenceValidator()
+        rules = [{"deny": ["a", "b"], "reason": "Test"}]
+        
+        # Should not crash even without context
+        error = validator.validate_sequence(
+            current_history=("a",),
+            next_tool_id="b",
+            sequence_rules=rules
+        )
+        
+        assert error is not None
+        # With no context, should use some sensible fallback (not crash)
+        # The specific fallback value is implementation-dependent
+        assert error.user_id is not None
+

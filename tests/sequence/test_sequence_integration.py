@@ -8,20 +8,36 @@ import os
 import pytest
 import tempfile
 import yaml
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import d2
-from d2 import d2_guard, set_user, clear_user_context
+from d2 import set_user, clear_user_context
 from d2.exceptions import PermissionDeniedError
+from d2.policy.manager import _policy_manager_instances
+# NOTE: We intentionally do NOT import d2_guard at module level.
+# This ensures we always use the unpatched decorator when tests run,
+# avoiding issues with conftest's _compat_patches fixture.
 
 
 @pytest.fixture
 def temp_policy_file():
     """Create a temporary policy file with sequence rules."""
+    # Save and clear D2_TOKEN to force local file mode
+    # (prevents cloud mode from being used if D2_TOKEN is set in environment)
+    saved_token = os.environ.pop('D2_TOKEN', None)
+    
+    # Disable file watcher to prevent macOS fsevents crashes during test teardown
+    os.environ['D2_DISABLE_FILE_WATCHER'] = '1'
+    
+    # Generate expiry date 6 days from now (within 7-day local limit)
+    expiry_date = datetime.now(timezone.utc) + timedelta(days=6)
+    expiry_str = expiry_date.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    
     policy = {
         "metadata": {
             "name": "sequence-test-policy",
-            "expires": "2099-12-31T23:59:59+00:00"
+            "expires": expiry_str
         },
         "policies": [
             {
@@ -62,16 +78,47 @@ def temp_policy_file():
     # Cleanup
     if 'D2_POLICY_FILE' in os.environ:
         del os.environ['D2_POLICY_FILE']
+    if 'D2_DISABLE_FILE_WATCHER' in os.environ:
+        del os.environ['D2_DISABLE_FILE_WATCHER']
     Path(policy_path).unlink(missing_ok=True)
+    
+    # Restore D2_TOKEN if it was set
+    if saved_token is not None:
+        os.environ['D2_TOKEN'] = saved_token
 
 
 @pytest.fixture
 async def configured_rbac(temp_policy_file):
     """Configure RBAC with the test policy."""
+    # Ensure clean slate - clear global state directly
+    _policy_manager_instances.clear()
+    clear_user_context()
+    
     await d2.configure_rbac_async()
     yield
+    
+    # Cleanup
     await d2.shutdown_all_rbac()
+    _policy_manager_instances.clear()
     clear_user_context()
+
+
+@pytest.fixture
+def configured_rbac_sync(temp_policy_file):
+    """Configure RBAC with the test policy (sync version)."""
+    # Ensure clean slate - clear global state directly
+    _policy_manager_instances.clear()
+    clear_user_context()
+    
+    d2.configure_rbac_sync()
+    yield
+    
+    # Cleanup - use anyio to avoid event loop conflicts
+    import anyio
+    anyio.run(d2.shutdown_all_rbac)
+    _policy_manager_instances.clear()
+    clear_user_context()
+
 
 
 class TestSequenceIntegration:
@@ -81,11 +128,11 @@ class TestSequenceIntegration:
     async def test_direct_exfiltration_blocked(self, configured_rbac):
         """Block database -> web pattern."""
         
-        @d2_guard("database.read_users")
+        @d2.d2_guard("database.read_users")
         async def read_users():
             return {"users": [{"name": "Alice"}]}
         
-        @d2_guard("web.http_request")
+        @d2.d2_guard("web.http_request")
         async def http_post(data):
             return {"status": "sent"}
         
@@ -106,11 +153,11 @@ class TestSequenceIntegration:
     async def test_safe_workflow_allowed(self, configured_rbac):
         """Allow analytics -> database (no external I/O)."""
         
-        @d2_guard("analytics.summarize")
+        @d2.d2_guard("analytics.summarize")
         async def summarize():
             return {"summary": "done"}
         
-        @d2_guard("database.read_users")
+        @d2.d2_guard("database.read_users")
         async def read_users():
             return {"users": []}
         
@@ -126,11 +173,11 @@ class TestSequenceIntegration:
     async def test_admin_bypasses_sequence(self, configured_rbac):
         """Admin role bypasses all sequence restrictions."""
         
-        @d2_guard("database.read_users")
+        @d2.d2_guard("database.read_users")
         async def read_users():
             return {"users": [{"name": "Bob"}]}
         
-        @d2_guard("web.http_request")
+        @d2.d2_guard("web.http_request")
         async def http_post(data):
             return {"status": "sent"}
         
@@ -146,15 +193,15 @@ class TestSequenceIntegration:
     async def test_multiple_sequence_rules(self, configured_rbac):
         """Enforce multiple deny patterns."""
         
-        @d2_guard("database.read_users")
+        @d2.d2_guard("database.read_users")
         async def read_users():
             return {"users": []}
         
-        @d2_guard("database.read_orders")
+        @d2.d2_guard("database.read_orders")
         async def read_orders():
             return {"orders": []}
         
-        @d2_guard("web.http_request")
+        @d2.d2_guard("web.http_request")
         async def http_post(data):
             return {"status": "sent"}
         
@@ -176,15 +223,18 @@ class TestSequenceIntegration:
             await http_post({"data": "test"})
         assert "Order data exfiltration" in exc_info.value.reason
 
-    @pytest.mark.asyncio
-    async def test_sync_functions_with_sequence(self, configured_rbac):
-        """Sequence enforcement works with sync functions too."""
+    def test_sync_functions_with_sequence(self, configured_rbac_sync):
+        """Sequence enforcement works with sync functions too.
         
-        @d2_guard("database.read_users")
+        Note: This test uses a sync fixture because sync functions called from
+        an async context would be auto-threaded, breaking context propagation.
+        """
+        
+        @d2.d2_guard("database.read_users")
         def read_users_sync():
             return {"users": [{"name": "Charlie"}]}
         
-        @d2_guard("web.http_request")
+        @d2.d2_guard("web.http_request")
         def http_post_sync(data):
             return {"status": "sent"}
         
@@ -204,16 +254,16 @@ class TestSequenceIntegration:
     async def test_nested_guarded_calls(self, configured_rbac):
         """Sequence tracking works through nested calls."""
         
-        @d2_guard("database.read_users")
+        @d2.d2_guard("database.read_users")
         async def read_users():
             return {"users": []}
         
-        @d2_guard("analytics.summarize")
+        @d2.d2_guard("analytics.summarize")
         async def process(data):
             # This internally calls another guarded function
             return {"processed": True}
         
-        @d2_guard("web.http_request")
+        @d2.d2_guard("web.http_request")
         async def send_data(data):
             return {"status": "sent"}
         
@@ -231,11 +281,11 @@ class TestSequenceIntegration:
     async def test_context_isolation(self, configured_rbac):
         """Each request has isolated call history."""
         
-        @d2_guard("database.read_users")
+        @d2.d2_guard("database.read_users")
         async def read_users():
             return {"users": []}
         
-        @d2_guard("web.http_request")
+        @d2.d2_guard("web.http_request")
         async def http_post(data):
             return {"status": "sent"}
         

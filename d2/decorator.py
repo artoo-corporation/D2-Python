@@ -4,6 +4,7 @@
 
 # d2/decorator.py
 
+import atexit
 import anyio
 import functools
 import inspect
@@ -40,6 +41,72 @@ from .telemetry.plan_limits import emit_plan_limit_warning
 
 # Sentinel object to detect if a parameter was provided by the user
 _sentinel = object()
+
+# Shared ThreadPoolExecutor for auto-threading sync functions called from async contexts.
+# This avoids creating a new executor per-call which would cause resource exhaustion
+# under high concurrency. The executor is bounded to prevent runaway thread creation.
+_AUTO_THREAD_EXECUTOR: Optional[_cf.ThreadPoolExecutor] = None
+_EXECUTOR_LOCK = _ctxvars.threading.Lock() if hasattr(_ctxvars, 'threading') else __import__('threading').Lock()
+
+# Default timeout for sync tools called from async context (seconds).
+# Can be overridden via D2_SYNC_TIMEOUT environment variable.
+# Set to None to wait indefinitely (not recommended in production).
+_DEFAULT_SYNC_TIMEOUT_SECONDS = 30.0
+
+def _get_sync_timeout() -> Optional[float]:
+    """Get the configured timeout for sync tool execution from async context.
+    
+    Environment variable D2_SYNC_TIMEOUT can be set to:
+    - A number (seconds): e.g., "60" for 60 seconds
+    - "0" or "none": Wait indefinitely (not recommended)
+    
+    Returns:
+        Timeout in seconds, or None for no timeout.
+    """
+    env_value = os.getenv("D2_SYNC_TIMEOUT", "").strip().lower()
+    if not env_value:
+        return _DEFAULT_SYNC_TIMEOUT_SECONDS
+    
+    if env_value in ("0", "none", "false"):
+        return None  # No timeout
+    
+    try:
+        timeout = float(env_value)
+        return timeout if timeout > 0 else None
+    except (ValueError, TypeError):
+        # Invalid value, use default
+        return _DEFAULT_SYNC_TIMEOUT_SECONDS
+
+
+def _get_auto_thread_executor() -> _cf.ThreadPoolExecutor:
+    """Get or create the shared auto-thread executor.
+    
+    Lazy initialization to avoid creating threads if auto-threading is never used.
+    """
+    global _AUTO_THREAD_EXECUTOR
+    if _AUTO_THREAD_EXECUTOR is None:
+        with _EXECUTOR_LOCK:
+            if _AUTO_THREAD_EXECUTOR is None:
+                # Bounded executor with descriptive thread names for debugging
+                _AUTO_THREAD_EXECUTOR = _cf.ThreadPoolExecutor(
+                    max_workers=4,  # Reasonable bound for blocking I/O offload
+                    thread_name_prefix="d2-auto-"
+                )
+    return _AUTO_THREAD_EXECUTOR
+
+
+def _shutdown_auto_thread_executor() -> None:
+    """Shutdown the shared executor at process exit."""
+    global _AUTO_THREAD_EXECUTOR
+    if _AUTO_THREAD_EXECUTOR is not None:
+        try:
+            _AUTO_THREAD_EXECUTOR.shutdown(wait=False)
+        except Exception:
+            pass  # Don't let shutdown failure break process exit
+
+
+# Register executor cleanup at exit
+atexit.register(_shutdown_auto_thread_executor)
 
 
 def d2_guard(
@@ -123,6 +190,9 @@ def d2_guard(
         def sync_wrapper(*args, **kwargs):
             """Wrapper for synchronous functions."""
             manager = get_policy_manager(instance_name)
+            # Mutable container to track if tool call was recorded inside check_and_run
+            # Used to re-record in outer scope for anyio.run() path (context doesn't persist)
+            _call_recorded = [False]
 
             async def check_and_run():
                 """Helper to run the async check and then the sync function."""
@@ -353,9 +423,13 @@ def d2_guard(
                 except Exception:
                     pass
 
-                # Record this call in history AFTER capturing telemetry, BEFORE execution
-                from .context import record_tool_call
-                record_tool_call(effective_tool_id)
+                # Set flag so outer scope knows to record (for anyio.run path)
+                # NOTE: We do NOT record here because record_tool_call writes to a
+                # shared state store keyed by request_id. When using anyio.run() or
+                # ThreadPoolExecutor, the outer scope also calls record_tool_call,
+                # which would result in double-recording. The outer scope is the
+                # authoritative place to record since it persists in the caller's context.
+                _call_recorded[0] = True
 
                 # If permission is granted, execute the tool and record metrics
                 exec_start = time.perf_counter()
@@ -400,7 +474,13 @@ def d2_guard(
                 asyncio.get_running_loop()
             except RuntimeError:
                 # No loop → run inline (fast path)
-                return anyio.run(check_and_run)
+                # Note: anyio.run() context changes don't persist, so we re-record
+                # the tool call in the outer scope if it was authorized
+                result = anyio.run(check_and_run)
+                if _call_recorded[0]:
+                    from .context import record_tool_call
+                    record_tool_call(effective_tool_id)
+                return result
             else:
                 # Loop running. Decide: strict or auto-thread
                 effective_strict = strict if strict is not None else _STRICT_ENV
@@ -438,9 +518,29 @@ def d2_guard(
                 # the wrapper's sync contract for callers.
                 # Copy current contextvars so user_id/roles propagate across threads
                 _ctx = _ctxvars.copy_context()
-                with _cf.ThreadPoolExecutor(max_workers=1) as _exec:
-                    _future = _exec.submit(lambda: _ctx.run(_run_in_thread))
-                    return _future.result()
+                # Use shared executor to avoid per-call executor creation overhead
+                _exec = _get_auto_thread_executor()
+                _future = _exec.submit(lambda: _ctx.run(_run_in_thread))
+                
+                # Wait with timeout to prevent indefinite blocking if executor is saturated
+                # or if the worker is stuck. Timeout is configurable via D2_SYNC_TIMEOUT.
+                _timeout = _get_sync_timeout()
+                try:
+                    result = _future.result(timeout=_timeout)
+                except _cf.TimeoutError:
+                    # Worker is still running but we timed out waiting
+                    # This prevents deadlocks when executor is saturated
+                    raise D2Error(
+                        f"Sync tool '{func.__qualname__}' timed out after {_timeout}s waiting for "
+                        f"executor thread. This may indicate executor saturation or a hung worker. "
+                        f"Increase D2_SYNC_TIMEOUT or investigate the tool's performance."
+                    )
+                
+                # Re-record in main thread context (worker thread changes don't persist)
+                if _call_recorded[0]:
+                    from .context import record_tool_call
+                    record_tool_call(effective_tool_id)
+                return result
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
@@ -614,15 +714,25 @@ def d2_guard(
                     "current_tool": effective_tool_id
                 })
                 
-                # 2. Track sequence for compliance (what was called before this)
+                # 2. Track data flow events (what was called before this)
                 if history:
                     source_tool = history[-1]
-                    sequence_pattern_blocked_total.add(1, {
+                    data_flow_event_total.add(1, {
                         "source_tool": source_tool,
                         "destination_tool": effective_tool_id,
                     })
+                    # Send to D2 cloud
+                    reporter = getattr(manager, "_usage_reporter", None)
+                    if reporter:
+                        reporter.track_event(
+                            "data_flow",
+                            {
+                                "source_tool": source_tool,
+                                "destination_tool": effective_tool_id,
+                            }
+                        )
                 
-                # 2. Track tool co-occurrence (which tools are called together)
+                # 3. Track tool co-occurrence (which tools are called together)
                 if len(history) >= 1:
                     tool_cooccurrence_total.add(1, {
                         "tool_a": history[-1],
@@ -630,7 +740,7 @@ def d2_guard(
                         "within_request": "true"
                     })
                 
-                # 3. Track anomalous call chain depth
+                # 4. Track anomalous call chain depth
                 if len(history) >= 5:  # 5+ hop chains are unusual
                     reporter = getattr(manager, "_usage_reporter", None)
                     if reporter:

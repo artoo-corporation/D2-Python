@@ -81,6 +81,26 @@ async def test_sync_check_inside_loop(monkeypatch, dummy_policy_bundle):
 
 
 @pytest.mark.anyio
+async def test_sync_is_tool_in_policy_inside_loop(monkeypatch, dummy_policy_bundle):
+    """Calling sync is_tool_in_policy from within an event-loop must raise *ConfigurationError*.
+    
+    This mirrors the behavior of check() - sync methods should not be callable
+    from async contexts to prevent blocking the event loop.
+    """
+    monkeypatch.setattr("d2.policy.FilePolicyLoader", lambda *a, **kw: _DummyLoader(dummy_policy_bundle))
+    pm = PolicyManager("sync_tool_check", api_url="http://api", pin_jwks_thumbprints=None)
+    pm._policy_bundle = dummy_policy_bundle  # pylint: disable=protected-access
+    pm._init_complete.set()
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        # We're already inside the anyio test loop
+        pm.is_tool_in_policy("weather_api")
+    
+    assert "async context" in str(exc_info.value).lower()
+    assert "is_tool_in_policy_async" in str(exc_info.value)
+
+
+@pytest.mark.anyio
 async def test_expiry_warning(monkeypatch, caplog):
     """_check_for_expiry_warning should log when expiry <24h."""
     # Build a bundle expiring in 1 hour

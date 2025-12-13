@@ -13,6 +13,12 @@ class _PM:  # minimal allow-all policy manager
         return True
     async def check_async(self, *_):
         return True
+    async def get_sequence_rules(self):
+        return []
+    async def get_tool_conditions(self, *_):
+        return None
+    def _get_bundle(self):
+        return None
 
 def _patch_pm(monkeypatch):
     monkeypatch.setattr("d2.decorator.get_policy_manager", lambda *_: _PM())

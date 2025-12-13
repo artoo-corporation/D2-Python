@@ -13,6 +13,7 @@ from typing import Optional, Sequence
 import logging
 
 from ..exceptions import PermissionDeniedError
+from ..context import get_user_context
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +49,23 @@ class SequenceValidator:
         current_history: Sequence[str],
         next_tool_id: str,
         sequence_rules: list[dict],
+        mode: Optional[str] = None,
     ) -> Optional[PermissionDeniedError]:
         """Check if appending next_tool_id violates any sequence rule.
         
-        Supports both deny and allow rules with precedence: allow overrides deny.
+        Supports two enforcement modes:
+        - "allow" (default): Blocklist approach - deny specific patterns, allow everything else
+        - "deny": Allowlist approach - only allow specific patterns, deny everything else (zero-trust)
+        
+        In allow mode, deny rules block specific patterns, and allow rules override deny rules.
+        In deny mode, only allow rules matter - if no allow rule matches, the sequence is blocked.
         
         Args:
             current_history: Sequence of tool_ids called so far in this request
             next_tool_id: The tool about to be called
             sequence_rules: List of sequence rules from policy
+            mode: Enforcement mode - "allow" (blocklist) or "deny" (allowlist).
+                  None defaults to "allow" for backward compatibility.
             
         Returns:
             PermissionDeniedError if violation detected, None otherwise
@@ -71,13 +80,31 @@ class SequenceValidator:
             ... )
             >>> assert error is not None  # Violation!
         """
+        # Normalize mode (case-insensitive, default to "allow")
+        effective_mode = (mode or "allow").lower()
+        if effective_mode not in ("allow", "deny"):
+            effective_mode = "allow"  # Safe fallback for invalid modes
+        
+        # In deny mode with no rules, block everything (fail-closed)
+        if effective_mode == "deny" and not sequence_rules:
+            ctx = get_user_context()
+            user_id = ctx.user_id if ctx and ctx.user_id else "(unknown)"
+            roles = list(ctx.roles) if ctx and ctx.roles else []
+            return PermissionDeniedError(
+                tool_id=next_tool_id,
+                user_id=user_id,
+                roles=roles,
+                reason="sequence_violation: No matching allow rule (deny mode with no rules)"
+            )
+        
+        # In allow mode with no rules, allow everything
         if not sequence_rules:
             return None
         
         # Construct the proposed sequence (history + next call)
         proposed_sequence = list(current_history) + [next_tool_id]
         
-        # Collect matching deny and allow rules (allow takes precedence)
+        # Collect matching deny and allow rules
         matching_deny_rule = None
         has_matching_allow = False
         
@@ -94,38 +121,59 @@ class SequenceValidator:
             if not pattern or not isinstance(pattern, list):
                 continue
             
-            # Single-step patterns don't make sense for sequences
-            if len(pattern) < 2:
+            # In allow mode, single-step deny patterns don't make sense (need 2+ steps)
+            # In deny mode, single-step allow patterns ARE valid (whitelist first calls)
+            if effective_mode == "allow" and len(pattern) < 2:
                 continue
             
             # Check if the proposed sequence matches the pattern
-            if self._matches_pattern(proposed_sequence, pattern):
+            if self._matches_pattern(proposed_sequence, pattern, effective_mode):
                 if is_allow:
-                    # Allow rule matches - override any denies
+                    # Allow rule matches
                     has_matching_allow = True
                 elif is_deny and not matching_deny_rule:
                     # Store first matching deny rule
                     matching_deny_rule = rule
         
-        # Apply precedence: allow overrides deny
-        if has_matching_allow:
-            return None
-        
-        if matching_deny_rule:
-            reason = matching_deny_rule.get("reason", "Denied sequence pattern")
+        # Apply mode-specific logic
+        if effective_mode == "deny":
+            # Deny mode (allowlist): must have a matching allow rule
+            if has_matching_allow:
+                return None
+            # No matching allow rule - block
+            ctx = get_user_context()
+            user_id = ctx.user_id if ctx and ctx.user_id else "(unknown)"
+            roles = list(ctx.roles) if ctx and ctx.roles else []
             return PermissionDeniedError(
                 tool_id=next_tool_id,
-                user_id="(sequence_context)",
-                roles=[],
-                reason=f"sequence_violation: {reason}"
+                user_id=user_id,
+                roles=roles,
+                reason="sequence_violation: No matching allow rule (deny mode)"
             )
-        
-        return None
+        else:
+            # Allow mode (blocklist): allow overrides deny
+            if has_matching_allow:
+                return None
+            
+            if matching_deny_rule:
+                reason = matching_deny_rule.get("reason", "Denied sequence pattern")
+                ctx = get_user_context()
+                user_id = ctx.user_id if ctx and ctx.user_id else "(unknown)"
+                roles = list(ctx.roles) if ctx and ctx.roles else []
+                return PermissionDeniedError(
+                    tool_id=next_tool_id,
+                    user_id=user_id,
+                    roles=roles,
+                    reason=f"sequence_violation: {reason}"
+                )
+            
+            return None
 
     def _matches_pattern(
         self, 
         sequence: list[str], 
-        pattern: list[str]
+        pattern: list[str],
+        mode: str = "allow"
     ) -> bool:
         """Check if a pattern appears in the sequence (with possible gaps).
         
@@ -140,6 +188,7 @@ class SequenceValidator:
         Args:
             sequence: The complete sequence of tool calls
             pattern: The pattern to match against (may contain @group references)
+            mode: Enforcement mode ("allow" or "deny")
             
         Returns:
             True if pattern found in sequence (in order, gaps allowed), False otherwise
@@ -166,6 +215,13 @@ class SequenceValidator:
             ... )
             True
         """
+        # Handle single-step patterns (only valid in deny mode for whitelisting first calls)
+        if len(pattern) == 1:
+            # For single-step patterns, just check if the last element of sequence matches
+            if sequence:
+                return self._tool_matches_element(sequence[-1], pattern[0])
+            return False
+        
         if len(pattern) > len(sequence):
             return False
         

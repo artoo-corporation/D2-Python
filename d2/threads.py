@@ -162,19 +162,19 @@ def submit_with_context(
         context_source = "ambient"
         _context_submissions_total.add(1, dict(_get_metric_tags(), method="ambient_snapshot"))
     
-    # Snapshot target context at submit time - temporarily set it to capture it properly
-    original_user = get_current_user()
-    try:
-        # Set the target context to snapshot it
+    # Snapshot target context at submit time WITHOUT mutating the caller's context.
+    # We run the context setup in an isolated execution to avoid any possibility
+    # of other coroutines observing a brief context change.
+    def _create_context_with_target():
+        """Create a context snapshot with the target user set.
+        
+        This runs in copy_context().run() so it doesn't affect the caller's context.
+        """
         set_user(target_context.user_id, target_context.roles)
-        # Snapshot this context for the thread to use
-        ctx = contextvars.copy_context()
-    finally:
-        # Restore the original context in the main thread
-        if original_user.user_id is not None:
-            set_user(original_user.user_id, original_user.roles)
-        else:
-            clear_user_context()
+        return contextvars.copy_context()
+    
+    # Run in isolated context - the set_user() call only affects the copied context
+    ctx = contextvars.copy_context().run(_create_context_with_target)
     
     logger.debug(
         "Submitting thread work with %s context: user_id=%s, roles=%s",

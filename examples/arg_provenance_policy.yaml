@@ -1,0 +1,59 @@
+# Argument-Level Provenance Policy
+# 
+# This policy demonstrates surgical data flow blocking using arg_blocks.
+# Instead of blocking ALL egress when sensitive data enters the request,
+# arg_blocks only blocks when specific arguments contain tainted values.
+
+metadata:
+  name: arg-provenance-demo
+  version: "1.0.0"
+  expires: "2025-12-20T00:00:00Z"
+  
+  tool_groups:
+    # Data sources with labels
+    sensitive_sources: [database.read_users, api.get_secrets]
+    untrusted_inputs: [user.get_input, email.read]
+    
+    # Egress and execution tools to protect
+    egress_tools: [http.post, email.send, slack.message]
+    execution_tools: [shell.run]
+  
+  data_flow:
+    # Which labels each tool/group emits
+    labels:
+      "@sensitive_sources": [SENSITIVE]
+      "@untrusted_inputs": [UNTRUSTED]
+    
+    # Request-level blocks (if you want hard boundaries)
+    # blocks:
+    #   SECRET: ["@egress_tools"]  # Secrets NEVER leave
+    
+    # Argument-level surgical blocking
+    arg_blocks:
+      # All egress tools: block if data/payload/body contains tainted data
+      "@egress_tools":
+        data: [SENSITIVE, UNTRUSTED]
+        payload: [SENSITIVE, UNTRUSTED]
+        body: [SENSITIVE, UNTRUSTED]
+      
+      # Email specific: block untrusted 'to' addresses
+      email.send:
+        to: [UNTRUSTED]
+      
+      # Execution tools: block if command comes from untrusted source
+      "@execution_tools":
+        command: [UNTRUSTED]
+
+# Grant agent role access to all tools
+policies:
+  - role: agent
+    permissions:
+      - "database.read_users"
+      - "api.get_secrets"
+      - "user.get_input"
+      - "email.read"
+      - "http.post"
+      - "email.send"
+      - "slack.message"
+      - "shell.run"
+

@@ -82,13 +82,13 @@ class CloudPolicyLoader(PolicyLoader):
                         response = await client.get(self._bundle_url, headers=headers, timeout=5.0)
                     # Retry on 5xx/429 once with small jitter
                     if response.status_code in (429, 500, 502, 503, 504) and i == 0:
-                        time.sleep(0.3)
+                        await asyncio.sleep(0.3)  # Non-blocking sleep in async context
                         continue
                     break
                 except httpx.RequestError as e:
                     last_exc = e
                     if i == 0:
-                        time.sleep(0.3)
+                        await asyncio.sleep(0.3)  # Non-blocking sleep in async context
                         continue
                     raise
             if 'response' not in locals():
@@ -104,9 +104,10 @@ class CloudPolicyLoader(PolicyLoader):
                     self._cache.save_polling_state(now + poll_seconds)
                     return {"jws": cached_bundle}
                 else:
-                    # Cached bundle missing, force fresh fetch
+                    # Cached bundle missing, force fresh fetch (properly close client)
                     headers.pop("If-None-Match", None)
-                    response = await httpx.AsyncClient().get(self._bundle_url, headers=headers, timeout=5.0)
+                    async with httpx.AsyncClient() as client:
+                        response = await client.get(self._bundle_url, headers=headers, timeout=5.0)
             
             # --------------------------------------------------------------
             # Plan-limit upgrade path – map HTTP 402 to D2PlanLimitError so the

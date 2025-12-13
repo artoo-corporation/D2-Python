@@ -251,9 +251,12 @@ def _silence_logging(caplog):  # noqa: D401
 
 
 @pytest.fixture(autouse=True)
-def _compat_patches(monkeypatch):  # noqa: D401
+def _compat_patches(monkeypatch, request):  # noqa: D401
     """Monkey-patch runtime quirks introduced by recent SDK refactor so that
     legacy unit-tests continue to pass **without** touching SDK source code.
+    
+    NOTE: The d2_guard patching is SKIPPED for sequence integration tests
+    because the double-call fallback breaks call history tracking.
     """
 
     # ------------------------------------------------------------------
@@ -284,7 +287,24 @@ def _compat_patches(monkeypatch):  # noqa: D401
     # ------------------------------------------------------------------
     # 2. Patch d2_guard to ensure async tools execute and return their value.
     #    The latest refactor accidentally skipped execution in the async path.
+    #
+    #    SKIP this patch for sequence integration tests and data flow tests -
+    #    the double-call fallback breaks call history tracking needed for
+    #    sequence enforcement.
     # ------------------------------------------------------------------
+
+    # Check if we're in a test that needs unpatched d2_guard behavior
+    # Use request.node.nodeid which works across all pytest versions
+    nodeid = request.node.nodeid if hasattr(request, 'node') else ""
+    skip_patch_for = (
+        "test_sequence_integration" in nodeid or
+        "test_data_flow" in nodeid
+    )
+    
+    if skip_patch_for:
+        # Don't patch d2_guard for these tests
+        yield
+        return
 
     import inspect
     import d2.decorator as _dec
@@ -321,10 +341,11 @@ def _compat_patches(monkeypatch):  # noqa: D401
     monkeypatch.setattr(_d2, "d2_guard", _patched_d2_guard)
 
     # Replace already-imported references (e.g., tests that did `from d2.decorator import d2_guard`)
+    # Use monkeypatch.setattr so changes are properly undone when the fixture ends
     import sys as _sys
     for _mod in list(_sys.modules.values()):
         if _mod and hasattr(_mod, "d2_guard") and getattr(_mod, "d2_guard") is original_d2_guard:
-            setattr(_mod, "d2_guard", _patched_d2_guard)
+            monkeypatch.setattr(_mod, "d2_guard", _patched_d2_guard)
 
     yield
 

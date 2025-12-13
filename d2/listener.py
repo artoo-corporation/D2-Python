@@ -8,6 +8,7 @@ import contextlib
 import logging
 import os
 import random
+import threading
 import uuid
 from typing import Awaitable, Callable, Optional
 
@@ -87,7 +88,10 @@ class PollingListener(Listener):
         # No client-side minimum clamp; control-plane dictates allowed intervals.
 
         self._etag = initial_etag
-        self._shutdown_event = asyncio.Event()
+        # Use threading.Event instead of asyncio.Event for thread-safe shutdown signaling.
+        # asyncio.Event is NOT thread-safe and causes issues when shutdown() is called
+        # from a different thread than the event loop (e.g., signal handlers, WSGI workers).
+        self._shutdown_event = threading.Event()
         self._task = None
         self._consecutive_failures = 0
         self._stale_logged = False
@@ -115,14 +119,47 @@ class PollingListener(Listener):
             await _orig_asyncio_sleep(0)
 
     async def shutdown(self):
-        """Stops the background polling task."""
+        """Stops the background polling task.
+        
+        Thread-safe: Can be called from any thread. The shutdown event uses
+        threading.Event which is safe for cross-thread signaling.
+        
+        If called from a different event loop than where the listener was started,
+        this method will signal shutdown but cannot await the task (different loop).
+        The task will exit on its next iteration when it checks the shutdown flag.
+        """
         if self._task:
+            # Signal shutdown (thread-safe with threading.Event)
             self._shutdown_event.set()
-            # Cancel the sleep immediately so loop breaks
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
+            
+            # Try to cancel and await the task, but handle cross-loop scenarios
+            try:
+                # Check if task belongs to the current event loop
+                current_loop = asyncio.get_running_loop()
+                task_loop = self._task.get_loop()
+                
+                if current_loop is task_loop:
+                    # Same loop - can safely cancel and await
+                    self._task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._task
+                    self._task = None
+                else:
+                    # Different loop - just signal (task will exit on next check)
+                    # We can't await a task from a different loop
+                    logger.debug(
+                        "shutdown() called from different event loop - "
+                        "task will exit on next shutdown check"
+                    )
+                    self._task = None
+            except RuntimeError:
+                # No running loop (sync context) - just signal
+                # The task will exit when it checks the shutdown flag
+                logger.debug(
+                    "shutdown() called without running event loop - "
+                    "task will exit on next shutdown check"
+                )
+                self._task = None
 
     async def _poll_loop(self):
         """The main polling loop."""

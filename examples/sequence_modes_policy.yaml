@@ -1,0 +1,313 @@
+# Example policy demonstrating sequence mode: allow (blocklist) vs deny (allowlist)
+# Shows how to use both modes for different security requirements
+
+metadata:
+  name: "sequence-modes-demo"
+  description: "Demonstrates allow mode (blocklist) and deny mode (allowlist) for sequences"
+  expires: "2026-12-31T23:59:59+00:00"
+  
+  # Define tool groups for use in sequence rules
+  tool_groups:
+    sensitive_data:
+      - database.read_users
+      - database.read_payments
+      - secrets.get_api_key
+    
+    external_io:
+      - web.http_request
+      - email.send
+      - s3.upload
+    
+    internal_processing:
+      - analytics.process
+      - analytics.summarize
+      - report.generate
+
+policies:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 1: ALLOW MODE (Default/Blocklist Approach)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Use case: Trusted users (admins, senior engineers) where most workflows are safe
+  # Strategy: Allow everything EXCEPT known-bad patterns
+  # ═══════════════════════════════════════════════════════════════════════════
+  
+  - role: senior_engineer
+    permissions: ["*"]  # Broad permissions
+    
+    sequence:
+      mode: allow  # Default: permit everything except explicit deny rules
+      
+      rules:
+        # Block specific dangerous patterns
+        - deny: ["@sensitive_data", "@external_io"]
+          reason: "Prevent direct data exfiltration to external endpoints"
+        
+        - deny: ["database.delete_all", "web.http_request"]
+          reason: "Prevent accidental data destruction followed by notification"
+        
+        # Everything else is implicitly allowed
+        # Examples of allowed sequences:
+        # - database.read_users -> analytics.process -> report.generate (safe internal flow)
+        # - web.http_request -> analytics.process (external data ingestion)
+        # - analytics.process -> email.send (sending processed data, not raw sensitive data)
+
+  - role: data_analyst
+    permissions:
+      - database.read_users
+      - database.read_payments
+      - analytics.process
+      - analytics.summarize
+      - report.generate
+      - file.write
+    
+    sequence:
+      mode: allow  # Blocklist approach
+      
+      rules:
+        # Block exfiltration patterns
+        - deny: ["@sensitive_data", "@external_io"]
+          reason: "Analysts cannot send raw data externally"
+        
+        # Allow exceptions: processed data can be emailed
+        - allow: ["@sensitive_data", "@internal_processing", "email.send"]
+          reason: "Safe: data is processed before external send"
+        
+        # Note: In allow mode, the allow rule overrides the deny rule
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 2: DENY MODE (Allowlist/Zero-Trust Approach)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Use case: Restricted users (contractors, AI agents, regulated environments)
+  # Strategy: Deny everything EXCEPT explicitly allowed patterns
+  # ═══════════════════════════════════════════════════════════════════════════
+  
+  - role: contractor
+    permissions:
+      - analytics.read_reports
+      - report.generate
+      - file.read
+      - email.send
+    
+    sequence:
+      mode: deny  # Zero-trust: only allow pre-approved workflows
+      
+      rules:
+        # Explicitly allow safe workflows
+        - allow: ["analytics.read_reports", "report.generate"]
+          reason: "Approved: contractors can read and generate reports"
+        
+        - allow: ["file.read", "report.generate"]
+          reason: "Approved: can generate reports from local files"
+        
+        - allow: ["report.generate", "email.send"]
+          reason: "Approved: can email generated reports"
+        
+        # Everything else is implicitly denied
+        # Examples of blocked sequences (even though user has permissions):
+        # - analytics.read_reports -> email.send (not in allow list)
+        # - file.read -> email.send (not in allow list)
+        # This prevents unauthorized data flows
+
+  - role: ai_agent
+    permissions:
+      - web.search
+      - database.query
+      - llm.analyze
+      - llm.summarize
+      - report.save
+      - cache.write
+    
+    sequence:
+      mode: deny  # Zero-trust for AI agents (critical for safety)
+      
+      rules:
+        # Define ONLY the allowed agentic workflows
+        - allow: ["web.search", "llm.summarize"]
+          reason: "Agent can search web and summarize results"
+        
+        - allow: ["database.query", "llm.analyze"]
+          reason: "Agent can query database and analyze results"
+        
+        - allow: ["llm.summarize", "report.save"]
+          reason: "Agent can save summaries to reports"
+        
+        - allow: ["llm.analyze", "cache.write"]
+          reason: "Agent can cache analysis results"
+        
+        # Three-step workflow: search -> analyze -> save
+        - allow: ["web.search", "llm.analyze", "report.save"]
+          reason: "Complete research workflow"
+        
+        # Everything else is blocked by default
+        # This prevents:
+        # - database.query -> web.http_request (data exfiltration)
+        # - database.query -> report.save (bypassing LLM analysis)
+        # - web.search -> database.query (external input to DB without validation)
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 3: REGULATED INDUSTRY (Healthcare/Finance)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Use case: HIPAA, SOC2, PCI-DSS compliance
+  # Strategy: Strict allowlist with documented audit trails
+  # ═══════════════════════════════════════════════════════════════════════════
+  
+  - role: healthcare_provider
+    permissions:
+      - ehr.read_patient
+      - hipaa.validate_access
+      - hipaa.log_access
+      - treatment.prescribe
+      - billing.submit
+      - report.clinical
+    
+    sequence:
+      mode: deny  # Required for HIPAA compliance
+      
+      rules:
+        # All patient data access must go through HIPAA validation
+        - allow: ["hipaa.validate_access", "ehr.read_patient"]
+          reason: "HIPAA-compliant: validation before access"
+        
+        - allow: ["hipaa.validate_access", "ehr.read_patient", "treatment.prescribe"]
+          reason: "Clinical workflow: validated access -> read -> prescribe"
+        
+        - allow: ["hipaa.validate_access", "ehr.read_patient", "hipaa.log_access"]
+          reason: "Audit workflow: validated access -> read -> log"
+        
+        - allow: ["ehr.read_patient", "billing.submit"]
+          reason: "Billing workflow: read patient data -> submit claim"
+        
+        # Note: Any sequence NOT in the allow list is blocked
+        # Example blocked: ehr.read_patient -> report.clinical (no validation)
+
+  - role: financial_analyst
+    permissions:
+      - trading.read_positions
+      - risk.calculate
+      - compliance.check
+      - report.financial
+      - email.send_encrypted
+    
+    sequence:
+      mode: deny  # Required for SOC2/PCI-DSS
+      
+      rules:
+        # All financial operations must include compliance check
+        - allow: ["compliance.check", "trading.read_positions", "risk.calculate"]
+          reason: "SOC2: compliance check before trading analysis"
+        
+        - allow: ["compliance.check", "trading.read_positions", "report.financial"]
+          reason: "SOC2: compliance check before reporting"
+        
+        - allow: ["report.financial", "email.send_encrypted"]
+          reason: "Approved: can send encrypted financial reports"
+        
+        # Blocked by default:
+        # - trading.read_positions -> email.send_encrypted (no compliance check)
+        # - trading.read_positions -> report.financial (no compliance check)
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 4: HYBRID APPROACH (Mode per Role)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Use case: Organization with different trust levels
+  # Strategy: Allow mode for admins, deny mode for others
+  # ═══════════════════════════════════════════════════════════════════════════
+  
+  - role: admin
+    permissions: ["*"]
+    
+    sequence:
+      mode: allow  # Trust admins, only block obvious dangers
+      
+      rules:
+        - deny: ["database.drop_all", "web.http_request"]
+          reason: "Prevent catastrophic accidents"
+
+  - role: intern
+    permissions:
+      - documentation.read
+      - documentation.write
+      - test_environment.deploy
+      - test_environment.query
+    
+    sequence:
+      mode: deny  # Zero-trust for interns
+      
+      rules:
+        # Only allow safe documentation workflows
+        - allow: ["documentation.read", "documentation.write"]
+          reason: "Can read and write docs"
+        
+        - allow: ["test_environment.deploy", "test_environment.query"]
+          reason: "Can deploy to test and query results"
+        
+        # Blocked: any cross-environment operations
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Example 5: USING TOOL GROUPS WITH DENY MODE
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Use case: Managing complex allowlists with @group references
+  # Strategy: Define groups, then allow specific group-to-group flows
+  # ═══════════════════════════════════════════════════════════════════════════
+  
+  - role: data_pipeline_service
+    permissions:
+      - database.read_users
+      - database.read_payments
+      - analytics.process
+      - analytics.summarize
+      - report.generate
+      - file.write
+      - cache.set
+    
+    sequence:
+      mode: deny  # Service accounts use strict allowlist
+      
+      rules:
+        # Allow: sensitive data -> internal processing -> safe outputs
+        - allow: ["@sensitive_data", "@internal_processing"]
+          reason: "Data can flow to internal processing"
+        
+        - allow: ["@internal_processing", "file.write"]
+          reason: "Processed data can be written to files"
+        
+        - allow: ["@internal_processing", "cache.set"]
+          reason: "Processed data can be cached"
+        
+        # This creates allowed paths:
+        # database.read_users -> analytics.process -> file.write ✅
+        # database.read_payments -> analytics.summarize -> cache.set ✅
+        # 
+        # But blocks:
+        # database.read_users -> file.write (direct write, no processing) ❌
+        # database.read_payments -> web.http_request (not in groups/rules) ❌
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SUMMARY: When to Use Each Mode
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# USE ALLOW MODE (BLOCKLIST) WHEN:
+# - Users are trusted (admins, senior engineers)
+# - Workflows are dynamic and hard to enumerate
+# - Organization culture values velocity over strict control
+# - Risk tolerance is moderate
+# - Easier to maintain (just add deny rules for new threats)
+#
+# USE DENY MODE (ALLOWLIST) WHEN:
+# - Users are restricted (contractors, interns, AI agents)
+# - Workflows are well-defined and stable
+# - Regulated industry (HIPAA, SOC2, PCI-DSS)
+# - Risk tolerance is low (zero-trust, high-security)
+# - Want to prevent "unknown unknowns" (fail-closed)
+# - Harder to maintain (must update allow list for new workflows)
+#
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+
+
+
+
+
+
+

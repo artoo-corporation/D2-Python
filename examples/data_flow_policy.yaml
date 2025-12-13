@@ -1,0 +1,103 @@
+# Copyright (c) 2025 Artoo Corporation
+# Licensed under the Business Source License 1.1 (see LICENSE).
+# Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
+
+# Data Flow Tracking Demo Policy
+# This policy demonstrates semantic data labeling for preventing data exfiltration.
+
+metadata:
+  name: "data-flow-demo"
+  description: "Demo policy for data flow tracking features"
+  # Note: For local mode, expiry must be within 7 days. Use D2 Cloud for long-lived policies.
+  expires: "2025-12-21T23:59:59+00:00"
+  
+  # Define tool groups for data flow rules
+  tool_groups:
+    # Data sources that produce sensitive information
+    sensitive_data: 
+      - database.read_users
+      - database.read_payments
+    
+    # Sources of secrets and credentials
+    secret_sources:
+      - secrets.get_api_key
+      - vault.read
+    
+    # External communication channels (egress)
+    egress_tools:
+      - http.request
+      - email.send
+      - slack.post
+      - webhook.call
+    
+    # Code execution tools
+    execution_tools:
+      - shell.execute
+      - code.eval
+    
+    # LLM/AI tools
+    llm_tools:
+      - llm.generate
+      - llm.chat
+    
+    # Untrusted input sources
+    untrusted_inputs:
+      - user.get_input
+      - web.scrape
+  
+  # Data flow rules: labels and blocks
+  data_flow:
+    # Which labels each tool/group produces
+    labels:
+      "@sensitive_data": [SENSITIVE]
+      "@secret_sources": [SECRET]
+      "@untrusted_inputs": [UNTRUSTED]
+      "@llm_tools": [LLM_OUTPUT]
+    
+    # Which labels block which tools
+    blocks:
+      SENSITIVE: ["@egress_tools"]
+      SECRET: ["@egress_tools", "logging.info"]
+      UNTRUSTED: ["@execution_tools"]
+      LLM_OUTPUT: ["@execution_tools"]
+
+policies:
+  # Research agent with data flow restrictions
+  - role: research_agent
+    permissions:
+      # Can access data sources
+      - database.read_users
+      - database.read_payments
+      - secrets.get_api_key
+      - vault.read
+      
+      # Can process data internally
+      - analytics.summarize
+      - file.write
+      - file.read
+      
+      # Can use egress (but blocked by data_flow labels)
+      - http.request
+      - email.send
+      - slack.post
+      - webhook.call
+      
+      # Can use LLM
+      - llm.generate
+      - llm.chat
+      
+      # Can use execution (but blocked by data_flow labels)
+      - shell.execute
+      - code.eval
+      
+      # Can get user input
+      - user.get_input
+      - web.scrape
+      
+      # Logging
+      - logging.info
+  
+  # Admin bypasses all checks
+  - role: admin
+    permissions: ["*"]
+

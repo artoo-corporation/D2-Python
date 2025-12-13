@@ -1,7 +1,13 @@
 # Copyright (c) 2025 Artoo Corporation
 # Licensed under the Business Source License 1.1 (see LICENSE).
 # Change Date: 2029-09-08  •  Change License: LGPL-3.0-or-later
-import asyncio, time, json, logging, os, tempfile
+import asyncio
+import json
+import logging
+import os
+import tempfile
+import threading
+import time
 from typing import Dict, Optional, Any
 from pathlib import Path
 from collections import OrderedDict
@@ -37,7 +43,14 @@ class JWKSCache:
         self._max_keys = max_keys
         self._api_token = api_token
         self._cache: OrderedDict[str, tuple[object, float]] = OrderedDict()
-        self._lock = asyncio.Lock()
+        
+        # Thread-safety: Use threading.RLock (reentrant) to protect cross-thread access.
+        # We use RLock instead of Lock to allow nested locking within the same thread,
+        # which can happen in async code when multiple coroutines run on the same thread.
+        # Note: asyncio.Lock is NOT suitable for multi-threaded use as it only protects
+        # within a single event loop.
+        self._thread_lock = threading.RLock()
+        
         self._cache_dir = Path.home() / ".cache" / "d2" / "jwks"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -113,51 +126,60 @@ class JWKSCache:
             logger.debug("Evicted LRU JWK kid=%s", kid)
 
     async def _refresh(self) -> None:
-        # Set refresh in progress flag
-        self._refresh_in_progress = True
+        """Refresh JWKS from the endpoint.
+        
+        Thread-safe: Uses threading.Lock only for cache mutation, not across await points.
+        """
+        # Set refresh in progress flag (thread-safe)
+        with self._thread_lock:
+            self._refresh_in_progress = True
+        
         try:
             headers = {}
             if self._api_token:
                 headers["Authorization"] = f"Bearer {self._api_token}"
                 
+            # HTTP request is done WITHOUT holding the lock
             async with httpx.AsyncClient() as client:
                 logger.debug("Fetching JWKS from %s", self._jwks_url)
                 resp = await client.get(self._jwks_url, headers=headers, timeout=10.0)
                 resp.raise_for_status()
                 jwks = resp.json()
 
-            # Only clear cache after successful HTTP response
+            # Now update cache with lock held (short critical section)
             now = time.time()
-            self._cache.clear()
-            
-            # Clean up old disk cache files
-            for cache_file in self._cache_dir.glob("*.json"):
-                self._try_unlink(cache_file)
+            with self._thread_lock:
+                self._cache.clear()
                 
-            for jwk_dict in jwks.get("keys", []):
-                kid = jwk_dict.get("kid")
-                if not kid:
-                    continue
-                try:
-                    key_obj = RSAAlgorithm.from_jwk(json.dumps(jwk_dict))
-                    expires_at = now + self._ttl
+                # Clean up old disk cache files
+                for cache_file in self._cache_dir.glob("*.json"):
+                    self._try_unlink(cache_file)
                     
-                    # LRU eviction before adding new key
-                    self._evict_lru()
-                    
-                    self._cache[kid] = (key_obj, expires_at)
-                    self._save_to_disk(kid, jwk_dict, expires_at)
-                except Exception:
-                    logger.exception("Failed to parse JWK kid=%s", kid)
-            
-            # Update refresh time for rate limiting
-            self._last_refresh_time = now
-            
-            # Clean up old missing key entries
-            self._cleanup_missing_keys()
+                for jwk_dict in jwks.get("keys", []):
+                    kid = jwk_dict.get("kid")
+                    if not kid:
+                        continue
+                    try:
+                        key_obj = RSAAlgorithm.from_jwk(json.dumps(jwk_dict))
+                        expires_at = now + self._ttl
+                        
+                        # LRU eviction before adding new key
+                        self._evict_lru()
+                        
+                        self._cache[kid] = (key_obj, expires_at)
+                        self._save_to_disk(kid, jwk_dict, expires_at)
+                    except Exception:
+                        logger.exception("Failed to parse JWK kid=%s", kid)
+                
+                # Update refresh time for rate limiting
+                self._last_refresh_time = now
+                
+                # Clean up old missing key entries
+                self._cleanup_missing_keys()
         finally:
             # Always clear the refresh in progress flag
-            self._refresh_in_progress = False
+            with self._thread_lock:
+                self._refresh_in_progress = False
 
     def _try_unlink(self, path: Path) -> None:
         """Attempt to remove a cache file while ignoring permission issues."""
@@ -182,6 +204,9 @@ class JWKSCache:
         """
         Get key with smart refresh logic for automatic key rotation support.
         
+        Thread-safe: Uses both threading.Lock (for cross-thread safety) and
+        asyncio.Lock (for coordination between coroutines in the same loop).
+        
         Args:
             kid: Key ID to lookup
             force_refresh: If True, forces JWKS refresh (from jwks_refresh header)
@@ -195,30 +220,32 @@ class JWKSCache:
         """
         now = time.time()
         
-        # First, try cache lookup
-        entry = self._cache.get(kid)
-        if entry and entry[1] > now and not force_refresh:
-            # Cache hit and not expired, no refresh needed
-            self._cache.move_to_end(kid)  # LRU update
-            # Clear from missing keys if we found it
-            self._missing_keys.pop(kid, None)
-            return entry[0]
-            
-        # Check if this key was recently marked as missing to avoid repeated fetches
-        if not force_refresh and kid in self._missing_keys:
-            missing_time = self._missing_keys[kid]
-            if (now - missing_time) < self._missing_key_timeout:
-                # Key was recently missing, don't retry yet unless it's a forced refresh
-                logger.debug("Skipping JWKS fetch for recently missing key %s", kid)
-                if entry:
-                    # Return expired key if available rather than failing immediately
-                    logger.warning("Using expired key %s due to recent missing key timeout", kid)
-                    self._cache.move_to_end(kid)
-                    return entry[0]
-                raise ValueError(f"kid {kid} recently marked as missing, not retrying yet")
+        # First, try cache lookup (thread-safe read)
+        with self._thread_lock:
+            entry = self._cache.get(kid)
+            if entry and entry[1] > now and not force_refresh:
+                # Cache hit and not expired, no refresh needed
+                self._cache.move_to_end(kid)  # LRU update
+                # Clear from missing keys if we found it
+                self._missing_keys.pop(kid, None)
+                return entry[0]
+                
+            # Check if this key was recently marked as missing to avoid repeated fetches
+            if not force_refresh and kid in self._missing_keys:
+                missing_time = self._missing_keys[kid]
+                if (now - missing_time) < self._missing_key_timeout:
+                    # Key was recently missing, don't retry yet unless it's a forced refresh
+                    logger.debug("Skipping JWKS fetch for recently missing key %s", kid)
+                    if entry:
+                        # Return expired key if available rather than failing immediately
+                        logger.warning("Using expired key %s due to recent missing key timeout", kid)
+                        self._cache.move_to_end(kid)
+                        return entry[0]
+                    raise ValueError(f"kid {kid} recently marked as missing, not retrying yet")
 
         # Cache miss, expired, or forced refresh needed
-        async with self._lock:
+        # Use threading lock for cross-thread coordination (RLock allows re-entry)
+        with self._thread_lock:
             # Double-check after acquiring lock
             entry = self._cache.get(kid)
             if entry and entry[1] > time.time() and not force_refresh:
@@ -235,32 +262,37 @@ class JWKSCache:
             
             # Determine if refresh should proceed based on rate limiting
             should_refresh = needs_refresh and self._should_refresh_jwks(force_refresh, has_expired_key)
-            
-            # Avoid concurrent refreshes unless it's a forced refresh
-            if should_refresh and self._refresh_in_progress and not force_refresh:
-                logger.debug("JWKS refresh already in progress, waiting...")
-                # Wait a bit and check cache again
-                await asyncio.sleep(0.5)
+            refresh_in_progress = self._refresh_in_progress
+        
+        # Avoid concurrent refreshes unless it's a forced refresh
+        if should_refresh and refresh_in_progress and not force_refresh:
+            logger.debug("JWKS refresh already in progress, waiting...")
+            # Wait a bit and check cache again
+            await asyncio.sleep(0.5)
+            with self._thread_lock:
                 entry = self._cache.get(kid)
                 if entry:
                     self._cache.move_to_end(kid)
                     return entry[0]
-            
-            if should_refresh:
-                try:
-                    await self._refresh_with_telemetry(rotation_metadata)
-                except Exception as e:
-                    logger.warning("JWKS refresh failed: %s", e)
-                    # Retry once after brief delay if forced refresh or enough time has passed
-                    if force_refresh or (now - self._last_refresh_time) > self._min_refresh_interval:
-                        await asyncio.sleep(1)
-                        try:
-                            await self._refresh_with_telemetry(rotation_metadata)
-                        except Exception as retry_e:
-                            logger.error("JWKS refresh retry failed: %s", retry_e)
-                            # Continue with cached keys if available
-            
-            # Final lookup after refresh attempt
+        
+        if should_refresh:
+            try:
+                await self._refresh_with_telemetry(rotation_metadata)
+            except Exception as e:
+                logger.warning("JWKS refresh failed: %s", e)
+                # Retry once after brief delay if forced refresh or enough time has passed
+                with self._thread_lock:
+                    last_refresh = self._last_refresh_time
+                if force_refresh or (now - last_refresh) > self._min_refresh_interval:
+                    await asyncio.sleep(1)
+                    try:
+                        await self._refresh_with_telemetry(rotation_metadata)
+                    except Exception as retry_e:
+                        logger.error("JWKS refresh retry failed: %s", retry_e)
+                        # Continue with cached keys if available
+        
+        # Final lookup after refresh attempt (thread-safe)
+        with self._thread_lock:
             entry = self._cache.get(kid)
             if not entry:
                 # Mark this key as missing to avoid repeated fetches
@@ -418,11 +450,20 @@ class JWKSCache:
             pass
 
     async def get_jwks(self) -> dict:
-        if not self._cache:
+        """Get all cached JWKS keys. Thread-safe."""
+        with self._thread_lock:
+            if not self._cache:
+                need_refresh = True
+            else:
+                need_refresh = False
+        
+        if need_refresh:
             await self._refresh()
-        keys = []
-        for kid, (key_obj, _) in self._cache.items():
-            jwk_dict = json.loads(RSAAlgorithm.to_jwk(key_obj))
-            jwk_dict["kid"] = kid
-            keys.append(jwk_dict)
-        return {"keys": keys} 
+        
+        with self._thread_lock:
+            keys = []
+            for kid, (key_obj, _) in self._cache.items():
+                jwk_dict = json.loads(RSAAlgorithm.to_jwk(key_obj))
+                jwk_dict["kid"] = kid
+                keys.append(jwk_dict)
+            return {"keys": keys} 

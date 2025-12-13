@@ -154,7 +154,16 @@ class FilePolicyLoader(PolicyLoader):
         return bundle
 
     def start(self, policy_update_callback: callable):
-        """Starts the file watcher if watchdog is available."""
+        """Starts the file watcher if watchdog is available.
+        
+        The file watcher can be disabled by setting D2_DISABLE_FILE_WATCHER=1.
+        This is useful in test scenarios where the watchdog fsevents extension
+        on macOS can cause crashes during shutdown.
+        """
+        if os.getenv("D2_DISABLE_FILE_WATCHER", "").lower() in ("1", "true", "yes"):
+            logger.debug("File watcher disabled via D2_DISABLE_FILE_WATCHER")
+            return
+            
         if WATCHDOG_AVAILABLE:
             self._start_watcher(policy_update_callback)
 
@@ -166,8 +175,35 @@ class FilePolicyLoader(PolicyLoader):
         logger.info("Started watching policy file '%s' for changes.", self.policy_path)
 
     async def shutdown(self):
-        if self._observer and self._observer.is_alive():
-            self._observer.stop()
-            # Run the blocking join() in a worker thread to not block the event loop
-            await anyio.to_thread.run_sync(self._observer.join)
+        observer = self._observer
+        self._observer = None  # Clear reference first to prevent double-shutdown
+        
+        if observer:
+            # IMPORTANT: The watchdog fsevents extension on macOS has fundamental
+            # threading bugs that cause segfaults/illegal instructions when stop()
+            # is called from a different async context or thread than where the
+            # observer was started. This is especially problematic in pytest fixtures.
+            #
+            # The safest approach is to:
+            # 1. Clear our reference first (above)
+            # 2. Try to stop but catch ALL exceptions including BaseException
+            # 3. Never call join() - let daemon thread die naturally
+            # 4. If we're on macOS with fsevents, be extra cautious
+            import sys
+            import platform
+            
+            # On macOS, fsevents can crash. On Linux with inotify, it's usually safe.
+            is_macos = platform.system() == "Darwin"
+            
+            try:
+                if observer.is_alive():
+                    observer.stop()
+                    logger.info("Stopped policy file watcher.")
+            except BaseException as e:
+                # Catch BaseException to handle SystemExit, KeyboardInterrupt, etc.
+                # that might come from the native fsevents code crashing
+                if is_macos:
+                    logger.debug("Error stopping file watcher on macOS (expected, non-fatal): %s", e)
+                else:
+                    logger.warning("Error stopping file watcher: %s", e)
             logger.info("Stopped policy file watcher.") 
