@@ -286,3 +286,156 @@ def test_error_message_suggests_valid_operators():
     assert "valid operators" in error_msg.lower() or "available" in error_msg.lower()
 
 
+# ---------------------------------------------------------------------------
+# not_matches operator tests
+# ---------------------------------------------------------------------------
+
+def test_not_matches_passes_when_pattern_not_found():
+    """not_matches should pass when the pattern is NOT in the value."""
+    result = _validate(
+        {
+            "data": {"not_matches": r"\d{3}-\d{2}-\d{4}"},  # SSN pattern
+        },
+        {"data": "Hello, this is safe text without SSN"},
+    )
+    assert result.allowed is True
+
+
+def test_not_matches_fails_when_pattern_found():
+    """not_matches should fail when the forbidden pattern IS in the value."""
+    result = _validate(
+        {
+            "data": {"not_matches": r"\d{3}-\d{2}-\d{4}"},  # SSN pattern
+        },
+        {"data": "User SSN is 123-45-6789"},
+    )
+    assert result.allowed is False
+    assert len(result.violations) == 1
+    assert result.violations[0].operator == "not_matches"
+
+
+def test_not_matches_detects_embedded_patterns():
+    """not_matches should detect patterns anywhere in the string (uses search, not fullmatch)."""
+    result = _validate(
+        {
+            "message": {"not_matches": r"(?i)password"},
+        },
+        {"message": "The user's PASSWORD is secret123"},
+    )
+    assert result.allowed is False
+
+
+def test_not_matches_passes_on_missing_value():
+    """not_matches should pass if the value is not provided."""
+    result = _validate(
+        {
+            "data": {"not_matches": r"secret"},
+        },
+        {},  # data not provided
+    )
+    assert result.allowed is True
+
+
+def test_not_matches_combined_with_required():
+    """not_matches combined with required should work correctly."""
+    # Required but contains forbidden pattern
+    result = _validate(
+        {
+            "data": {"required": True, "not_matches": r"(?i)(ssn|password)"},
+        },
+        {"data": "My SSN is 123"},
+    )
+    assert result.allowed is False
+
+    # Required and safe
+    result = _validate(
+        {
+            "data": {"required": True, "not_matches": r"(?i)(ssn|password)"},
+        },
+        {"data": "Safe data without sensitive info"},
+    )
+    assert result.allowed is True
+
+
+# ---------------------------------------------------------------------------
+# max_bytes operator tests
+# ---------------------------------------------------------------------------
+
+def test_max_bytes_passes_when_under_limit():
+    """max_bytes should pass when byte size is within limit."""
+    result = _validate(
+        {
+            "data": {"max_bytes": 100},
+        },
+        {"data": "Hello, world!"},  # 13 bytes
+    )
+    assert result.allowed is True
+
+
+def test_max_bytes_fails_when_over_limit():
+    """max_bytes should fail when byte size exceeds limit."""
+    result = _validate(
+        {
+            "data": {"max_bytes": 10},
+        },
+        {"data": "This string is way too long"},  # 27 bytes
+    )
+    assert result.allowed is False
+    assert len(result.violations) == 1
+    assert result.violations[0].operator == "max_bytes"
+    assert result.violations[0].actual == 27
+
+
+def test_max_bytes_counts_utf8_correctly():
+    """max_bytes should count multi-byte UTF-8 characters correctly."""
+    # Each emoji is 4 bytes in UTF-8
+    result = _validate(
+        {
+            "data": {"max_bytes": 10},
+        },
+        {"data": "🔥🔥🔥"},  # 12 bytes (3 emojis × 4 bytes each)
+    )
+    assert result.allowed is False
+    assert result.violations[0].actual == 12
+
+    # Same string passes with higher limit
+    result = _validate(
+        {
+            "data": {"max_bytes": 12},
+        },
+        {"data": "🔥🔥🔥"},
+    )
+    assert result.allowed is True
+
+
+def test_max_bytes_handles_dicts_via_json():
+    """max_bytes should estimate dict size via JSON serialization."""
+    result = _validate(
+        {
+            "payload": {"max_bytes": 50},
+        },
+        {"payload": {"key": "value", "nested": {"a": 1}}},
+    )
+    assert result.allowed is True
+
+    # Large dict should fail
+    result = _validate(
+        {
+            "payload": {"max_bytes": 10},
+        },
+        {"payload": {"key": "this is a much longer value"}},
+    )
+    assert result.allowed is False
+
+
+def test_max_bytes_passes_on_missing_value():
+    """max_bytes should pass if value is not provided."""
+    result = _validate(
+        {
+            "data": {"max_bytes": 100},
+        },
+        {},
+    )
+    assert result.allowed is True
+
+

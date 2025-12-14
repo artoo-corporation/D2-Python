@@ -2,7 +2,7 @@
   "metadata": {
     "name": "defense-in-depth-demo",
     "description": "Comprehensive security with RBAC + Abstract Sequencing + Guardrails",
-    "expires": "2025-11-08T23:59:59+00:00",
+    "expires": "2025-12-20T23:59:59+00:00",
     "tool_groups": {
       "sensitive_data": [
         "database.read_users",
@@ -128,7 +128,7 @@
             },
             "output": {
               "api_key": {
-                "maxLength": 20,
+                "max_bytes": 20,
                 "action": "truncate"
               }
             }

@@ -33,7 +33,7 @@ from d2.exceptions import PermissionDeniedError
 # Set policy file path
 EXAMPLES_DIR = Path(__file__).resolve().parent
 POLICY_PATH = EXAMPLES_DIR / "defense_in_depth_policy.json"
-# os.environ["D2_POLICY_FILE"] = str(POLICY_PATH)
+os.environ["D2_POLICY_FILE"] = str(POLICY_PATH)
 
 
 # =============================================================================

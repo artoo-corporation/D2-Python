@@ -40,8 +40,10 @@ class ConstraintEvaluator:
         "contains",
         "not_contains",
         "matches",
+        "not_matches",
         "minLength",
         "maxLength",
+        "max_bytes",
     )
 
     def __init__(self):
@@ -371,6 +373,28 @@ class ConstraintEvaluator:
             message=f"Argument '{context.argument}' must match regex {expected!r}.",
         )
 
+    def _check_not_matches(self, expected, value_present, value, context):
+        """Validate that a string does NOT match a regex pattern.
+        
+        Uses re.search() (not fullmatch) to detect forbidden patterns anywhere
+        in the value. This is useful for blocking sensitive data patterns like
+        SSNs, credit card numbers, etc.
+        """
+        if not value_present:
+            return None
+        if not isinstance(value, str):
+            return self._string_type_violation("not_matches", expected, value, context)
+        pattern = re.compile(expected)
+        if not pattern.search(value):
+            return None
+        return ValidationViolation(
+            argument=context.argument,
+            operator="not_matches",
+            expected=expected,
+            actual="[value contains forbidden pattern]",
+            message=f"Argument '{context.argument}' must not match regex {expected!r}.",
+        )
+
     def _check_minLength(self, expected, value_present, value, context):  # noqa: N802
         if not value_present or value is None:
             return None
@@ -414,6 +438,47 @@ class ConstraintEvaluator:
             actual=len(value),
             message=(
                 f"Argument '{context.argument}' length must be ≤ {expected}, got {len(value)}."
+            ),
+        )
+
+    def _check_max_bytes(self, expected, value_present, value, context):
+        """Validate that a value's byte size doesn't exceed the limit.
+        
+        This is distinct from maxLength which counts characters/items.
+        For UTF-8 strings, a single character can be 1-4 bytes.
+        Useful for limiting payload sizes in network requests.
+        """
+        if not value_present or value is None:
+            return None
+        
+        # Calculate byte size based on type
+        if isinstance(value, str):
+            byte_size = len(value.encode("utf-8"))
+        elif isinstance(value, bytes):
+            byte_size = len(value)
+        else:
+            # For other types, try JSON serialization as a reasonable estimate
+            import json
+            try:
+                byte_size = len(json.dumps(value).encode("utf-8"))
+            except (TypeError, ValueError):
+                return ValidationViolation(
+                    argument=context.argument,
+                    operator="max_bytes",
+                    expected=expected,
+                    actual=value,
+                    message=f"Argument '{context.argument}' cannot be measured in bytes.",
+                )
+        
+        if byte_size <= expected:
+            return None
+        return ValidationViolation(
+            argument=context.argument,
+            operator="max_bytes",
+            expected=expected,
+            actual=byte_size,
+            message=(
+                f"Argument '{context.argument}' byte size must be ≤ {expected}, got {byte_size}."
             ),
         )
 
