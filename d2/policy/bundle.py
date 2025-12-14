@@ -30,6 +30,10 @@ class PolicyBundle:
     tool_to_roles: Dict[str, Set[str]] = field(default_factory=dict, repr=False)
     tool_conditions: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict, repr=False)
     role_to_sequences: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict, repr=False)
+    # Data flow tracking: which labels each tool produces
+    tool_labels: Dict[str, Set[str]] = field(default_factory=dict, repr=False)
+    # Data flow tracking: which labels block which tools
+    label_blocks: Dict[str, Set[str]] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         """Parse the raw bundle into a more efficient, inverted structure."""
@@ -126,6 +130,9 @@ class PolicyBundle:
 
         logger.debug("Final tool_to_roles mapping: %s", dict(self.tool_to_roles))
         logger.debug("Final role_to_sequences mapping: %s", dict(self.role_to_sequences))
+        
+        # Parse data_flow rules from metadata
+        self._parse_data_flow(policy_content)
 
     @property
     def all_known_tools(self) -> Set[str]:
@@ -345,6 +352,131 @@ class PolicyBundle:
             validated.append(rule)
         
         return validated
+    
+    def _parse_data_flow(self, policy_content: Dict[str, Any]) -> None:
+        """Parse data_flow rules from policy metadata.
+        
+        The data_flow section defines semantic labeling for data provenance:
+        - labels: Maps tools/groups to the labels they produce when they run
+        - blocks: Maps labels to the tools/groups they block
+        
+        Example policy:
+            metadata:
+              data_flow:
+                labels:
+                  "@sensitive_data": [SENSITIVE]
+                  "secrets.get": [SECRET]
+                blocks:
+                  SENSITIVE: ["@egress_tools"]
+                  SECRET: ["@egress_tools", "logging.info"]
+        
+        Args:
+            policy_content: The policy content dict
+        """
+        metadata = policy_content.get("metadata", {})
+        data_flow = metadata.get("data_flow", {})
+        
+        if not data_flow:
+            logger.debug("No data_flow rules defined in policy")
+            return
+        
+        tool_groups = self._extract_tool_groups(policy_content)
+        
+        # Parse 'labels' section: tool/group -> labels it produces
+        labels_config = data_flow.get("labels", {})
+        for tool_or_group, labels in labels_config.items():
+            if not labels:
+                continue
+            
+            # Normalize labels to a set
+            if isinstance(labels, str):
+                label_set = {labels}
+            elif isinstance(labels, list):
+                label_set = set(labels)
+            else:
+                logger.warning("Invalid labels format for '%s': %s", tool_or_group, labels)
+                continue
+            
+            # Expand tool references
+            tools = self._expand_tool_ref(tool_or_group, tool_groups)
+            for tool in tools:
+                self.tool_labels.setdefault(tool, set()).update(label_set)
+        
+        logger.debug("Parsed data_flow labels: %s", dict(self.tool_labels))
+        
+        # Parse 'blocks' section: label -> tools it blocks
+        blocks_config = data_flow.get("blocks", {})
+        for label, tools_or_groups in blocks_config.items():
+            if not tools_or_groups:
+                continue
+            
+            # Normalize to list
+            if isinstance(tools_or_groups, str):
+                tools_or_groups = [tools_or_groups]
+            elif not isinstance(tools_or_groups, list):
+                logger.warning("Invalid blocks format for label '%s': %s", label, tools_or_groups)
+                continue
+            
+            # Expand tool references and build inverted index (tool -> blocking labels)
+            for tool_or_group in tools_or_groups:
+                tools = self._expand_tool_ref(tool_or_group, tool_groups)
+                for tool in tools:
+                    self.label_blocks.setdefault(tool, set()).add(label)
+        
+        logger.debug("Parsed data_flow blocks (tool -> blocking labels): %s", dict(self.label_blocks))
+    
+    def _expand_tool_ref(self, ref: str, tool_groups: Dict[str, List[str]]) -> List[str]:
+        """Expand @group reference or return single tool.
+        
+        Args:
+            ref: Tool ID or @group reference
+            tool_groups: Dict mapping group names to tool ID lists
+            
+        Returns:
+            List of tool IDs (single item if not a group)
+        """
+        if ref.startswith("@"):
+            group_name = ref[1:]  # Remove @ prefix
+            if group_name not in tool_groups:
+                logger.warning("Unknown tool group '@%s' in data_flow rules", group_name)
+                return []
+            return tool_groups.get(group_name, [])
+        return [ref]
+    
+    def get_labels_for_tool(self, tool_id: str) -> Set[str]:
+        """Get the labels that a tool produces when it runs.
+        
+        These labels are added to the request's facts after the tool executes.
+        
+        Args:
+            tool_id: The tool identifier
+            
+        Returns:
+            Set of label strings (empty if tool doesn't produce labels)
+            
+        Example:
+            >>> bundle.get_labels_for_tool("database.read")
+            {'SENSITIVE', 'PII'}
+        """
+        return self.tool_labels.get(tool_id, set())
+    
+    def get_blocking_labels_for_tool(self, tool_id: str) -> Set[str]:
+        """Get the labels that would block this tool from running.
+        
+        If any of these labels are present in the request's facts,
+        this tool should be denied.
+        
+        Args:
+            tool_id: The tool identifier
+            
+        Returns:
+            Set of blocking label strings (empty if tool has no blockers)
+            
+        Example:
+            >>> bundle.get_blocking_labels_for_tool("http.request")
+            {'SENSITIVE', 'SECRET'}
+        """
+        return self.label_blocks.get(tool_id, set())
 
 
 __all__ = ["PolicyBundle"]

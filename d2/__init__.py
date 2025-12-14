@@ -20,6 +20,12 @@ from .context import (
     clear_user_context,
     UserContext,
     warn_if_context_set,
+    # Data flow facts
+    record_fact,
+    record_facts,
+    get_facts,
+    has_fact,
+    has_any_fact,
 )
 from .decorator import d2_guard as d2_guard
 # Alias for backwards-compat & docs examples that use `@d2`
@@ -73,6 +79,13 @@ __all__ = [
     "clear_context",
     "clear_context_async",
     "headers_extractor",
+
+    # Data Flow Facts
+    "record_fact",
+    "record_facts",
+    "get_facts",
+    "has_fact",
+    "has_any_fact",
 
     # Exceptions
     "D2Error",

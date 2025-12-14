@@ -9,7 +9,7 @@ metadata:
   name: "data-flow-demo"
   description: "Demo policy for data flow tracking features"
   # Note: For local mode, expiry must be within 7 days. Use D2 Cloud for long-lived policies.
-  expires: "2025-12-21T23:59:59+00:00"
+  expires: "2025-12-20T23:59:59+00:00"
   
   # Define tool groups for data flow rules
   tool_groups:

@@ -344,6 +344,58 @@ def d2_guard(
                                     pass
                                 tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                                 return await _handle_permission_denied(sequence_error)
+
+                        # Layer 4: Data flow fact check
+                        bundle = getattr(manager, '_get_bundle', lambda: None)()
+                        if bundle and hasattr(bundle, 'get_blocking_labels_for_tool'):
+                            blocking_labels = bundle.get_blocking_labels_for_tool(effective_tool_id)
+                            if blocking_labels:
+                                from .context import get_facts
+                                current_facts = get_facts()
+                                violated_facts = current_facts & blocking_labels
+                                if violated_facts:
+                                    data_flow_start = time.perf_counter()
+                                    error = PermissionDeniedError(
+                                        tool_id=effective_tool_id,
+                                        user_id=user_context.user_id if user_context else "unknown",
+                                        roles=user_context.roles if user_context else [],
+                                        reason=f"data_flow_violation: tool blocked by labels {violated_facts}"
+                                    )
+                                    data_flow_duration_ms = (time.perf_counter() - data_flow_start) * 1000.0
+                                    guardrail_latency_ms.record(data_flow_duration_ms, {
+                                        "type": "data_flow_check",
+                                        "tool_id": effective_tool_id,
+                                        "result": "denied"
+                                    })
+                                    
+                                    # Telemetry for data flow violation
+                                    try:
+                                        authz_denied_reason_total.add(
+                                            1, {"reason": "data_flow_violation", "mode": manager.mode}
+                                        )
+                                        user_violation_attempts_total.add(1, {
+                                            "user_id": user_context.user_id if user_context else "unknown",
+                                            "violation_type": "data_flow",
+                                        })
+                                        reporter = getattr(manager, "_usage_reporter", None)
+                                        if reporter:
+                                            reporter.track_event(
+                                                "authz_decision",
+                                                {
+                                                    "tool_id": effective_tool_id,
+                                                    "result": "denied",
+                                                    "reason": "data_flow_violation",
+                                                    "mode": manager.mode,
+                                                    "blocking_labels": list(blocking_labels),
+                                                    "violated_facts": list(violated_facts),
+                                                    "all_facts": list(current_facts),
+                                                },
+                                            )
+                                    except Exception:
+                                        pass
+                                    
+                                    tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
+                                    return await _handle_permission_denied(error)
                 except D2PlanLimitError:
                     emit_plan_limit_warning()
                     raise
@@ -454,6 +506,29 @@ def d2_guard(
                     duration_ms = (time.perf_counter() - exec_start) * 1000.0
                     tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "success"})
                     tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "success"})
+                    
+                    # Record data flow labels emitted by this tool
+                    bundle = getattr(manager, '_get_bundle', lambda: None)()
+                    if bundle and hasattr(bundle, 'get_labels_for_tool'):
+                        emitted_labels = bundle.get_labels_for_tool(effective_tool_id)
+                        if emitted_labels:
+                            from .context import record_facts
+                            record_facts(emitted_labels)
+                            # Telemetry for fact emission
+                            try:
+                                feature_usage_total.add(1, {"feature": "data_flow_labels"})
+                                reporter = getattr(manager, "_usage_reporter", None)
+                                if reporter:
+                                    reporter.track_event(
+                                        "data_flow_labels_emitted",
+                                        {
+                                            "tool_id": effective_tool_id,
+                                            "labels": list(emitted_labels),
+                                        },
+                                    )
+                            except Exception:
+                                pass
+                    
                     return result
                 except D2PlanLimitError as e:
                     emit_plan_limit_warning()
@@ -694,6 +769,58 @@ def d2_guard(
                                 pass
                             tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
                             return await _handle_permission_denied(sequence_error)
+
+                    # Layer 4: Data flow fact check
+                    bundle = getattr(manager, '_get_bundle', lambda: None)()
+                    if bundle and hasattr(bundle, 'get_blocking_labels_for_tool'):
+                        blocking_labels = bundle.get_blocking_labels_for_tool(effective_tool_id)
+                        if blocking_labels:
+                            from .context import get_facts
+                            current_facts = get_facts()
+                            violated_facts = current_facts & blocking_labels
+                            if violated_facts:
+                                data_flow_start = time.perf_counter()
+                                error = PermissionDeniedError(
+                                    tool_id=effective_tool_id,
+                                    user_id=user_context.user_id if user_context else "unknown",
+                                    roles=user_context.roles if user_context else [],
+                                    reason=f"data_flow_violation: tool blocked by labels {violated_facts}"
+                                )
+                                data_flow_duration_ms = (time.perf_counter() - data_flow_start) * 1000.0
+                                guardrail_latency_ms.record(data_flow_duration_ms, {
+                                    "type": "data_flow_check",
+                                    "tool_id": effective_tool_id,
+                                    "result": "denied"
+                                })
+                                
+                                # Telemetry for data flow violation
+                                try:
+                                    authz_denied_reason_total.add(
+                                        1, {"reason": "data_flow_violation", "mode": manager.mode}
+                                    )
+                                    user_violation_attempts_total.add(1, {
+                                        "user_id": user_context.user_id if user_context else "unknown",
+                                        "violation_type": "data_flow",
+                                    })
+                                    reporter = getattr(manager, "_usage_reporter", None)
+                                    if reporter:
+                                        reporter.track_event(
+                                            "authz_decision",
+                                            {
+                                                "tool_id": effective_tool_id,
+                                                "result": "denied",
+                                                "reason": "data_flow_violation",
+                                                "mode": manager.mode,
+                                                "blocking_labels": list(blocking_labels),
+                                                "violated_facts": list(violated_facts),
+                                                "all_facts": list(current_facts),
+                                            },
+                                        )
+                                except Exception:
+                                    pass
+                                
+                                tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
+                                return await _handle_permission_denied(error)
             except D2PlanLimitError:
                 emit_plan_limit_warning(
                     message=(
@@ -805,6 +932,29 @@ def d2_guard(
                 duration_ms = (time.perf_counter() - exec_start) * 1000.0
                 tool_exec_latency_ms.record(duration_ms, {"tool_id": effective_tool_id, "status": "success"})
                 tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "success"})
+                
+                # Record data flow labels emitted by this tool
+                bundle = getattr(manager, '_get_bundle', lambda: None)()
+                if bundle and hasattr(bundle, 'get_labels_for_tool'):
+                    emitted_labels = bundle.get_labels_for_tool(effective_tool_id)
+                    if emitted_labels:
+                        from .context import record_facts
+                        record_facts(emitted_labels)
+                        # Telemetry for fact emission
+                        try:
+                            feature_usage_total.add(1, {"feature": "data_flow_labels"})
+                            reporter = getattr(manager, "_usage_reporter", None)
+                            if reporter:
+                                reporter.track_event(
+                                    "data_flow_labels_emitted",
+                                    {
+                                        "tool_id": effective_tool_id,
+                                        "labels": list(emitted_labels),
+                                    },
+                                )
+                        except Exception:
+                            pass
+                
                 return result
             except D2PlanLimitError:
                 emit_plan_limit_warning(

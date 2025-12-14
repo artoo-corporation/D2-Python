@@ -85,6 +85,7 @@ The public API exported from `d2` follows semantic versioning. Breaking changes 
 - Decorator: `d2_guard` (also available as `d2`)
 - RBAC setup: `configure_rbac_async`, `configure_rbac_sync`, `shutdown_rbac`, `shutdown_all_rbac`, `get_policy_manager`
 - Context management: `set_user`, `set_user_context`, `get_user_context`, `clear_user_context`, `warn_if_context_set`
+- Data flow: `record_fact`, `record_facts`, `get_facts`, `has_fact`, `has_any_fact`
 - Web middleware: `ASGIMiddleware`, `headers_extractor`, `clear_context`, `clear_context_async`
 - Error types: `PermissionDeniedError`, `MissingPolicyError`, `BundleExpiredError`, `TooManyToolsError`, `PolicyTooLargeError`, `InvalidSignatureError`, `ConfigurationError`, `D2PlanLimitError`, `D2Error`
 
@@ -828,7 +829,204 @@ It shows 5 scenarios:
 4. Secrets leak (blocked)
 5. Admin bypass (allowed)
 
-For complete protection, combine RBAC, sequence enforcement, and input/output guardrails. See the Trail of Bits research linked above for more attack patterns.
+For complete protection, combine RBAC, sequence enforcement, data flow tracking, and input/output guardrails. See the Trail of Bits research linked above for more attack patterns.
+
+---
+
+## Data flow tracking (version 1.2+)
+
+**What it does:** Tracks semantic labels about what kind of data has entered a request, and blocks tools that shouldn't handle that data type.
+
+Sequence enforcement blocks specific tool patterns. Data flow tracking provides blanket protection: "Once sensitive data enters the request, block ALL egress tools."
+
+### The problem
+
+Sequences can catch specific patterns like `[database.read, http.request]`, but attackers can pivot:
+
+```python
+# Blocked by sequence rule: [database.read, http.request]
+users = await database.read()
+await http.request(url, users)  # ✗ Blocked
+
+# But attacker tries another channel...
+users = await database.read()
+await slack.post(channel, users)  # ✓ Allowed (no rule for this pattern)
+await email.send(to, users)       # ✓ Allowed (no rule for this pattern)
+```
+
+You'd need to enumerate every possible egress tool in your sequence rules.
+
+### The solution
+
+Data flow tracking uses semantic labels:
+
+```yaml
+metadata:
+  tool_groups:
+    sensitive_data: [database.read, database.read_users, secrets.get]
+    egress_tools: [http.request, email.send, slack.post, webhook.call]
+
+  data_flow:
+    labels:
+      "@sensitive_data": [SENSITIVE]
+      "@secrets": [SECRET]
+      
+    blocks:
+      SENSITIVE: ["@egress_tools"]
+      SECRET: ["@egress_tools", "logging.info"]
+```
+
+**What this means:**
+- When any `@sensitive_data` tool runs, D2 adds the `SENSITIVE` label to the request
+- Any tool in `@egress_tools` is blocked if `SENSITIVE` is present
+- Labels persist for the entire request, regardless of intermediate tools
+
+### How it works
+
+```python
+set_user("agent-1", roles=["researcher"])
+# facts: {} (empty)
+
+# Call 1: Read sensitive data
+users = await database.read()
+# facts: {"SENSITIVE"} ← label added after tool runs
+
+# Call 2: Process internally (allowed - no blocking labels)
+summary = await analytics.summarize(users)
+# facts: {"SENSITIVE"} (unchanged)
+
+# Call 3: Try ANY egress - all blocked
+await http.request(url, summary)   # ✗ Blocked by SENSITIVE
+await slack.post(channel, summary) # ✗ Blocked by SENSITIVE
+await email.send(to, summary)      # ✗ Blocked by SENSITIVE
+```
+
+### Execution layers
+
+D2 now runs 5 layers:
+
+1. **RBAC**: Can this role call this tool?
+2. **Input validation**: Are these arguments safe?
+3. **Sequence enforcement**: Does this create a forbidden pattern?
+4. **Data flow check**: Do current labels block this tool?
+5. Run the function
+6. **Output validation/sanitization**: Is the return value safe?
+7. **Record labels**: Add any labels this tool produces
+
+### Policy syntax
+
+**Labels section:** Maps tools/groups to labels they produce:
+
+```yaml
+data_flow:
+  labels:
+    # Groups emit labels
+    "@sensitive_data": [SENSITIVE]
+    "@secret_sources": [SECRET]
+    "@untrusted_inputs": [UNTRUSTED]
+    "@llm_tools": [LLM_OUTPUT]
+    
+    # Individual tools can also emit
+    "payment.process": [PCI_DATA, SENSITIVE]
+```
+
+**Blocks section:** Maps labels to tools they block:
+
+```yaml
+data_flow:
+  blocks:
+    SENSITIVE: ["@egress_tools"]
+    SECRET: ["@egress_tools", "logging.info"]
+    UNTRUSTED: ["@execution_tools"]
+    LLM_OUTPUT: ["shell.execute", "code.eval"]
+```
+
+### Common use cases
+
+**1. Compliance (PCI, GDPR, HIPAA):**
+
+```yaml
+data_flow:
+  labels:
+    "@pii_sources": [PII, GDPR]
+    "@payment_tools": [PCI]
+    
+  blocks:
+    PCI: ["logging.info", "@external_apis"]
+    GDPR: ["@external_apis"]
+```
+
+**2. LLM output tainting (CaMeL-style):**
+
+```yaml
+data_flow:
+  labels:
+    "@llm_tools": [LLM_OUTPUT]
+    
+  blocks:
+    LLM_OUTPUT: [shell.execute, code.eval, subprocess.run]
+```
+
+This prevents prompt injection → code execution attacks.
+
+**3. Multi-agent data isolation:**
+
+```yaml
+data_flow:
+  labels:
+    "@user_input_tools": [UNTRUSTED]
+    
+  blocks:
+    UNTRUSTED: ["@privileged_tools", "@write_tools"]
+```
+
+### Programmatic access
+
+D2 exports functions for inspecting and manipulating facts:
+
+```python
+from d2 import get_facts, has_fact, has_any_fact, record_fact
+
+# Check current labels
+if has_fact("SENSITIVE"):
+    log.warning("Handling sensitive data")
+
+# Check for any of multiple labels
+if has_any_fact(["PCI", "HIPAA", "GDPR"]):
+    enable_audit_logging()
+
+# Get all labels
+print(get_facts())  # frozenset({'SENSITIVE', 'PII'})
+
+# Manually record a label (rarely needed - usually from policy)
+record_fact("CUSTOM_LABEL")
+```
+
+### Data flow vs sequences
+
+| Feature | Sequences | Data Flow |
+|---------|-----------|-----------|
+| Blocks | Specific tool patterns | Any tool with matching label |
+| Scope | "A then B is bad" | "Once X, block everything in group Y" |
+| Pivot attacks | Need rules for each path | One label blocks all egress |
+| Expression | Tool combinations | Data classifications |
+| Best for | Known dangerous patterns | Blanket protection |
+
+**Use both together:** Sequences for explicit patterns, data flow for blanket protection.
+
+### Try it
+
+Run the demo:
+
+```bash
+python examples/data_flow_demo.py
+```
+
+Shows:
+1. Sensitive data blocking all egress tools
+2. LLM output preventing code execution
+3. Pivot attack prevention
+4. Multi-label accumulation
 
 ---
 

@@ -12,9 +12,6 @@ from contextlib import contextmanager
 
 @dataclass(frozen=True)
 class UserContext:
-<<<<<<< Updated upstream
-    """Immutable dataclass to hold user identity information."""
-=======
     """Immutable dataclass to hold user identity and request state.
     
     This dataclass holds:
@@ -25,11 +22,11 @@ class UserContext:
       which retrieves from shared storage.
     - Data flow tracking (facts)
     """
->>>>>>> Stashed changes
     user_id: Optional[str] = None
     roles: Optional[frozenset[str]] = None
     call_history: tuple[str, ...] = ()  # Sequence of tool_ids called in this request
     request_id: Optional[str] = None  # Unique ID to correlate all events within a request
+    facts: frozenset[str] = frozenset()  # Data flow labels accumulated during request
 
 
 @dataclass
@@ -101,12 +98,8 @@ def set_user_context(user_id: Optional[str] = None, roles: Optional[Iterable[str
     token = _user_context.set(UserContext(
         user_id=user_id, 
         roles=frozenset(roles) if roles else None,
-<<<<<<< Updated upstream
-        request_id=str(uuid.uuid4())  # Auto-generated, not user-controllable
-=======
-        request_id=request_id,
+        request_id=request_id,  # Use the same request_id for shared state lookup
         facts=frozenset(),  # Initial facts (will be synced from shared state)
->>>>>>> Stashed changes
     ))
     try:
         yield
@@ -254,12 +247,8 @@ def set_user(user_id: Optional[str] = None, roles: Optional[Iterable[str]] = Non
     _user_context.set(UserContext(
         user_id=user_id, 
         roles=frozenset(roles) if roles else None,
-<<<<<<< Updated upstream
-        request_id=str(uuid.uuid4())  # Auto-generated, not user-controllable
-=======
-        request_id=request_id,
+        request_id=request_id,  # Use the same request_id for shared state lookup
         facts=frozenset(),  # Initial facts (will be synced from shared state)
->>>>>>> Stashed changes
     )) 
 
 # ---------------------------------------------------------------------------
@@ -296,19 +285,6 @@ def record_tool_call(tool_id: str) -> None:
         >>> ctx.call_history
         ('database.read', 'analytics.process')
     """
-<<<<<<< Updated upstream
-    ctx = get_user_context()
-    new_history = ctx.call_history + (tool_id,)
-    _user_context.set(UserContext(
-        user_id=ctx.user_id,
-        roles=ctx.roles,
-        call_history=new_history,
-        request_id=ctx.request_id  # Preserve request_id
-    ))
-
-
-# ---------------------------------------------------------------------------
-=======
     ctx = _user_context.get()
     request_id = ctx.request_id
     
@@ -482,7 +458,6 @@ def has_any_fact(facts: Iterable[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
->>>>>>> Stashed changes
 # Public export list – keeps internal helpers private
 # ---------------------------------------------------------------------------
 
@@ -491,8 +466,17 @@ __all__ = [
     "set_user_context",
     "run_as",
     "get_current_user",
+    "get_user_context",  # Backwards compatibility alias
     "clear_user_context",
     "set_user",
     "get_user_id",
     "get_user_roles",
+    # Data flow facts
+    "record_fact",
+    "record_facts",
+    "get_facts",
+    "has_fact",
+    "has_any_fact",
+    # Sequence tracking
+    "record_tool_call",
 ] 
