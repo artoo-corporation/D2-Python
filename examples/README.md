@@ -84,25 +84,55 @@ python examples/sequence_demo.py
 
 ---
 
-### 4. defense_in_depth_demo.py
+### 4. data_flow_demo.py (NEW - v1.2+)
 
-**Demonstrates:** Complete security stack (RBAC + Sequence + Guardrails).
+**Demonstrates:** Semantic data flow tracking with facts (labels) that block egress tools.
 
 **Features shown:**
-- All three layers working together
+- **Fact labeling:** Tools emit semantic labels after execution
+- **Blanket blocking:** One fact blocks all tools in a group
+- **Pivot attack prevention:** Attacker can't switch to email/slack/webhook
+- **Multi-label accumulation:** Facts compound during request
+- **Programmatic API:** `record_fact()`, `get_facts()`, `has_fact()`, `has_any_fact()`
+
+**Use cases:**
+- Compliance (PCI, GDPR, HIPAA) - label data types, block external APIs
+- LLM output tainting (CaMeL-style) - prevent prompt injection → code execution
+- Multi-agent isolation - block privileged tools after untrusted input
+
+**Run:**
+```bash
+python examples/data_flow_demo.py
+```
+
+**Policy:** `data_flow_policy.yaml`
+
+**Key difference from sequences:**
+- Sequences block specific tool patterns (`A → B`)
+- Data flow blocks **all** tools with matching label ("once sensitive, block all egress")
+
+---
+
+### 5. defense_in_depth_demo.py
+
+**Demonstrates:** Complete security stack (RBAC + Sequence + Data Flow + Guardrails).
+
+**Features shown:**
+- All four layers working together
 - Defense in depth approach
 - Comprehensive protection
+- Conditional authorization based on guardrails
 
 **Run:**
 ```bash
 python examples/defense_in_depth_demo.py
 ```
 
-**Policy:** `defense_in_depth_policy.yaml`
+**Policy:** `defense_in_depth_policy.json`
 
 ---
 
-### 5. multi_role_demo.py
+### 7. multi_role_demo.py
 
 **Demonstrates:** Multi-role policies for reduced duplication.
 
@@ -120,7 +150,7 @@ python examples/multi_role_demo.py
 
 ---
 
-### 6. local_mode_demo.py
+### 8. local_mode_demo.py
 
 **Demonstrates:** Basic RBAC with local file mode.
 
@@ -139,6 +169,18 @@ python examples/local_mode_demo.py
 ---
 
 ## What's New (Recent Enhancements)
+
+### Data Flow Tracking (v1.2+)
+- **Semantic labeling:** Tools emit facts (labels) after execution
+- **Blanket blocking:** One fact can block all tools in a group
+- **Pivot attack prevention:** No need to enumerate every egress path
+- **Programmatic API:** `record_fact()`, `get_facts()`, `has_fact()`, `has_any_fact()`
+- **Compliance ready:** Label data as PCI, GDPR, HIPAA and automatically block external APIs
+
+### New Constraint Operators (v1.2+)
+- **`not_matches`:** Regex pattern that must NOT match (e.g., block SSNs, passwords)
+- **`max_bytes`:** Limit payload size in bytes (UTF-8 aware, distinct from `maxLength`)
+- **`not_contains`:** String must not contain substring (e.g., block path traversal)
 
 ### Policy Validation (v1.3)
 - **Strict operator validation:** Unknown operators cause `ConfigurationError` at load time
@@ -186,9 +228,10 @@ python examples/sequence_demo.py
 
 | Policy File | Used By | Key Features |
 |-------------|---------|--------------|
+| `data_flow_policy.yaml` | data_flow_demo.py | Fact labeling, blanket blocking, pivot prevention |
 | `guardrails_policy.yaml` | guardrails_demo.py | Input validation, output sanitization, pattern redaction |
 | `sequence_demo_policy.yaml` | sequence_demo.py | Tool groups (@sensitive_data, @external_io), lazy expansion |
-| `defense_in_depth_policy.yaml` | defense_in_depth_demo.py | All layers combined |
+| `defense_in_depth_policy.json` | defense_in_depth_demo.py | All layers combined (RBAC + Sequence + Data Flow + Guardrails) |
 | `multi_role_policy.yaml` | multi_role_demo.py | Multi-role syntax |
 | `local_mode_demo_policy.yaml` | local_mode_demo.py | Basic RBAC |
 
@@ -199,8 +242,9 @@ python examples/sequence_demo.py
 1. **Start with `local_mode_demo.py`** - Understand basic RBAC
 2. **Then `guardrails_demo.py`** - Learn input/output guardrails
 3. **Then `sequence_demo.py`** - See temporal authorization
-4. **Then `policy_validation_demo.py`** - Understand policy validation
-5. **Finally `defense_in_depth_demo.py`** - See everything together
+4. **Then `data_flow_demo.py`** - Understand semantic data tracking
+5. **Then `policy_validation_demo.py`** - Understand policy validation
+6. **Finally `defense_in_depth_demo.py`** - See everything together
 
 ---
 
@@ -227,6 +271,12 @@ d2 diagnose --verbose
 - **Direct:** `database.read_users` → `web.http_request` (sequence_demo.py)
 - **Transitive:** `database.read_users` → `analytics.summarize` → `web.http_request` (sequence_demo.py)
 - **Local:** `database.read_users` → `file.write` (sequence_demo.py)
+- **Blanket:** Once SENSITIVE fact is set, ALL egress blocked (data_flow_demo.py)
+
+### Data Flow Tracking
+- **Compliance:** Label PCI/GDPR data, auto-block external APIs (data_flow_demo.py)
+- **LLM safety:** Block code execution after LLM output (data_flow_demo.py)
+- **Pivot prevention:** One label blocks all egress, no enumeration needed (data_flow_demo.py)
 
 ### Input Validation
 - Argument constraints (guardrails_demo.py)

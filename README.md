@@ -240,8 +240,10 @@ These operators work for both input validation and output validation/sanitizatio
 | `matches` | Regex pattern match | `{matches: "^[a-z_]+$"}` | String |
 | `not_matches` | Regex must not match | `{not_matches: "(?i)password"}` | String |
 | `contains` | String contains substring | `{contains: "@example.com"}` | String |
+| `not_contains` | String must not contain | `{not_contains: "../"}` | String |
 | `startsWith` | String starts with prefix | `{startsWith: "https://"}` | String |
 | `endsWith` | String ends with suffix | `{endsWith: ".com"}` | String |
+| `max_bytes` | Maximum byte size (UTF-8) | `{max_bytes: 10000}` | String, data |
 
 **Important notes:**
 
