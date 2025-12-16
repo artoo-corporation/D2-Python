@@ -43,6 +43,8 @@ from .metrics import (
     tool_cost_units_total,
     # New compliance & audit metrics
     data_flow_event_total,
+    facts_recorded_total,
+    data_flow_blocked_total,
 )
 from .usage import UsageReporter
 
@@ -85,6 +87,8 @@ __all__ = [
     "tool_cost_units_total",
     # New compliance & audit metrics
     "data_flow_event_total",
+    "facts_recorded_total",
+    "data_flow_blocked_total",
     # Utilities
     "get_tracer",
     "meter",

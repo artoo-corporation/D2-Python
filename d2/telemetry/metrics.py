@@ -218,6 +218,18 @@ data_flow_event_total = meter.create_counter(
     unit="1",
 )
 
+facts_recorded_total = meter.create_counter(
+    name="d2.facts.recorded.total",
+    description="Counts facts (data flow labels) recorded during requests.",
+    unit="1",
+)
+
+data_flow_blocked_total = meter.create_counter(
+    name="d2.data_flow.blocked.total",
+    description="Counts tools blocked due to data flow label violations.",
+    unit="1",
+)
+
 
 __all__ = [
     # Existing metrics
@@ -257,4 +269,6 @@ __all__ = [
     "tool_cost_units_total",
     # New compliance & audit metrics
     "data_flow_event_total",
+    "facts_recorded_total",
+    "data_flow_blocked_total",
 ]

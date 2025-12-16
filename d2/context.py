@@ -170,6 +170,7 @@ from typing import TYPE_CHECKING as _T
 import logging as _logging
 
 from .telemetry import context_stale_total as _context_stale_total
+from .telemetry import facts_recorded_total as _facts_recorded_total
 
 
 def is_context_set() -> bool:
@@ -359,6 +360,12 @@ def record_fact(fact: str) -> None:
             request_id=ctx.request_id,
             facts=new_facts,
         ))
+    
+    # Emit telemetry for fact recording
+    try:
+        _facts_recorded_total.add(1, {"fact": fact})
+    except Exception:
+        pass  # Telemetry never interferes with core functionality
 
 
 def record_facts(facts: Iterable[str]) -> None:
@@ -400,6 +407,13 @@ def record_facts(facts: Iterable[str]) -> None:
             request_id=ctx.request_id,
             facts=new_facts,
         ))
+    
+    # Emit telemetry for each fact recorded
+    try:
+        for fact in facts_set:
+            _facts_recorded_total.add(1, {"fact": fact})
+    except Exception:
+        pass  # Telemetry never interferes with core functionality
 
 
 def get_facts() -> frozenset[str]:

@@ -480,15 +480,231 @@ class TestDataFlowEnforcement:
 class TestDataFlowTelemetry:
     """Tests for data_flow telemetry events."""
 
-    @pytest.mark.asyncio
-    async def test_fact_recorded_event_emitted(self):
-        """Telemetry event should be emitted when facts are recorded."""
-        # This test verifies telemetry integration
-        pass  # TODO: Implement when telemetry hooks are added
+    def setup_method(self):
+        clear_user_context()
+
+    def teardown_method(self):
+        clear_user_context()
+
+    def test_fact_recorded_metric_emitted(self):
+        """OTEL metric should be emitted when facts are recorded via record_fact()."""
+        from d2.telemetry.metrics import facts_recorded_total
+        
+        set_user("agent-1", ["agent"])
+        
+        # Mock the metric's add method to verify it's called
+        original_add = facts_recorded_total.add
+        calls = []
+        
+        def mock_add(value, attributes=None):
+            calls.append({"value": value, "attributes": attributes})
+            return original_add(value, attributes)
+        
+        facts_recorded_total.add = mock_add
+        try:
+            record_fact("SENSITIVE")
+            record_fact("PII")
+            
+            # Verify metric was emitted for each fact
+            assert len(calls) == 2
+            assert calls[0]["attributes"]["fact"] == "SENSITIVE"
+            assert calls[1]["attributes"]["fact"] == "PII"
+        finally:
+            facts_recorded_total.add = original_add
+
+    def test_record_facts_emits_metrics_for_each(self):
+        """record_facts() should emit a metric for each fact."""
+        from d2.telemetry.metrics import facts_recorded_total
+        
+        set_user("agent-1", ["agent"])
+        
+        original_add = facts_recorded_total.add
+        calls = []
+        
+        def mock_add(value, attributes=None):
+            calls.append({"value": value, "attributes": attributes})
+            return original_add(value, attributes)
+        
+        facts_recorded_total.add = mock_add
+        try:
+            record_facts(["SENSITIVE", "PII", "SECRET"])
+            
+            # Verify metric was emitted for each fact
+            assert len(calls) == 3
+            recorded_facts = {c["attributes"]["fact"] for c in calls}
+            assert recorded_facts == {"SENSITIVE", "PII", "SECRET"}
+        finally:
+            facts_recorded_total.add = original_add
 
     @pytest.mark.asyncio
-    async def test_data_flow_violation_event_emitted(self):
-        """Telemetry event should be emitted on data_flow violation."""
-        # This test verifies telemetry integration
-        pass  # TODO: Implement when telemetry hooks are added
+    async def test_data_flow_blocked_metric_emitted(self):
+        """data_flow_blocked_total should be emitted when a tool is blocked by facts."""
+        from d2.decorator import d2_guard
+        from d2.telemetry.metrics import data_flow_blocked_total
+        from d2.exceptions import PermissionDeniedError
+        
+        # Create a mock policy manager with data_flow rules
+        manager = MagicMock()
+        manager.mode = "file"
+        manager._init_complete = MagicMock()
+        manager._init_complete.is_set.return_value = True
+        manager._init_complete.wait = AsyncMock()
+        
+        bundle = MagicMock()
+        bundle.all_known_tools = {"http.request"}
+        bundle.tool_to_roles = {"http.request": {"agent"}, "*": set()}
+        bundle.role_to_sequences = {}
+        bundle.get_tool_groups.return_value = {}
+        bundle.get_labels_for_tool = MagicMock(return_value=set())
+        bundle.get_blocking_labels_for_tool = MagicMock(return_value={"SENSITIVE"})
+        
+        manager._get_bundle.return_value = bundle
+        manager._policy_bundle = bundle
+        manager.check_async = AsyncMock(return_value=True)
+        manager.is_tool_in_policy_async = AsyncMock(return_value=True)
+        manager.get_tool_conditions = AsyncMock(return_value=None)
+        manager.get_sequence_rules = AsyncMock(return_value=[])
+        manager._usage_reporter = None
+        
+        set_user("agent-1", ["agent"])
+        record_fact("SENSITIVE")  # Pre-set blocking fact
+        
+        # Mock the blocked metric
+        original_add = data_flow_blocked_total.add
+        calls = []
+        
+        def mock_add(value, attributes=None):
+            calls.append({"value": value, "attributes": attributes})
+            return original_add(value, attributes)
+        
+        data_flow_blocked_total.add = mock_add
+        
+        try:
+            with patch("d2.decorator.get_policy_manager", return_value=manager):
+                @d2_guard("http.request")
+                async def send_request():
+                    return {"status": "sent"}
+                
+                with pytest.raises(PermissionDeniedError):
+                    await send_request()
+            
+            # Verify data_flow_blocked_total metric was emitted
+            assert len(calls) == 1
+            assert calls[0]["attributes"]["tool_id"] == "http.request"
+            assert "SENSITIVE" in calls[0]["attributes"]["blocking_label"]
+        finally:
+            data_flow_blocked_total.add = original_add
+
+    @pytest.mark.asyncio
+    async def test_cloud_event_emitted_on_labels_recorded(self):
+        """UsageReporter should receive data_flow_labels_emitted event when tool emits labels."""
+        from d2.decorator import d2_guard
+        
+        # Create a mock policy manager
+        manager = MagicMock()
+        manager.mode = "cloud"
+        manager._init_complete = MagicMock()
+        manager._init_complete.is_set.return_value = True
+        manager._init_complete.wait = AsyncMock()
+        
+        bundle = MagicMock()
+        bundle.all_known_tools = {"database.read"}
+        bundle.tool_to_roles = {"database.read": {"agent"}, "*": set()}
+        bundle.role_to_sequences = {}
+        bundle.get_tool_groups.return_value = {}
+        bundle.get_labels_for_tool = MagicMock(return_value={"SENSITIVE", "PII"})
+        bundle.get_blocking_labels_for_tool = MagicMock(return_value=set())
+        
+        manager._get_bundle.return_value = bundle
+        manager._policy_bundle = bundle
+        manager.check_async = AsyncMock(return_value=True)
+        manager.is_tool_in_policy_async = AsyncMock(return_value=True)
+        manager.get_tool_conditions = AsyncMock(return_value=None)
+        manager.get_sequence_rules = AsyncMock(return_value=[])
+        
+        # Mock UsageReporter
+        mock_reporter = MagicMock()
+        track_event_calls = []
+        
+        def mock_track_event(event_type, event_data):
+            track_event_calls.append({"event_type": event_type, "event_data": event_data})
+        
+        mock_reporter.track_event = mock_track_event
+        manager._usage_reporter = mock_reporter
+        
+        set_user("agent-1", ["agent"])
+        
+        with patch("d2.decorator.get_policy_manager", return_value=manager):
+            @d2_guard("database.read")
+            async def read_database():
+                return {"users": ["alice"]}
+            
+            await read_database()
+        
+        # Find the data_flow_labels_emitted event
+        labels_events = [c for c in track_event_calls if c["event_type"] == "data_flow_labels_emitted"]
+        assert len(labels_events) == 1
+        assert labels_events[0]["event_data"]["tool_id"] == "database.read"
+        assert set(labels_events[0]["event_data"]["labels"]) == {"SENSITIVE", "PII"}
+
+    @pytest.mark.asyncio
+    async def test_cloud_event_emitted_on_data_flow_violation(self):
+        """UsageReporter should receive authz_decision event on data_flow violation."""
+        from d2.decorator import d2_guard
+        from d2.exceptions import PermissionDeniedError
+        
+        # Create a mock policy manager
+        manager = MagicMock()
+        manager.mode = "cloud"
+        manager._init_complete = MagicMock()
+        manager._init_complete.is_set.return_value = True
+        manager._init_complete.wait = AsyncMock()
+        
+        bundle = MagicMock()
+        bundle.all_known_tools = {"http.request"}
+        bundle.tool_to_roles = {"http.request": {"agent"}, "*": set()}
+        bundle.role_to_sequences = {}
+        bundle.get_tool_groups.return_value = {}
+        bundle.get_labels_for_tool = MagicMock(return_value=set())
+        bundle.get_blocking_labels_for_tool = MagicMock(return_value={"SENSITIVE", "SECRET"})
+        
+        manager._get_bundle.return_value = bundle
+        manager._policy_bundle = bundle
+        manager.check_async = AsyncMock(return_value=True)
+        manager.is_tool_in_policy_async = AsyncMock(return_value=True)
+        manager.get_tool_conditions = AsyncMock(return_value=None)
+        manager.get_sequence_rules = AsyncMock(return_value=[])
+        
+        # Mock UsageReporter
+        mock_reporter = MagicMock()
+        track_event_calls = []
+        
+        def mock_track_event(event_type, event_data):
+            track_event_calls.append({"event_type": event_type, "event_data": event_data})
+        
+        mock_reporter.track_event = mock_track_event
+        manager._usage_reporter = mock_reporter
+        
+        set_user("agent-1", ["agent"])
+        record_fact("SENSITIVE")  # Pre-set blocking fact
+        
+        with patch("d2.decorator.get_policy_manager", return_value=manager):
+            @d2_guard("http.request")
+            async def send_request():
+                return {"status": "sent"}
+            
+            with pytest.raises(PermissionDeniedError):
+                await send_request()
+        
+        # Find the authz_decision event with data_flow_violation reason
+        authz_events = [
+            c for c in track_event_calls 
+            if c["event_type"] == "authz_decision" and c["event_data"].get("reason") == "data_flow_violation"
+        ]
+        assert len(authz_events) == 1
+        event_data = authz_events[0]["event_data"]
+        assert event_data["tool_id"] == "http.request"
+        assert event_data["result"] == "denied"
+        assert "SENSITIVE" in event_data["violated_facts"]
+        assert "SENSITIVE" in event_data["blocking_labels"]
 

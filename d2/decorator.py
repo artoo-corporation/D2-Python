@@ -34,6 +34,7 @@ from .telemetry import (
     tool_cooccurrence_total,
     feature_usage_total,
     data_flow_event_total,
+    data_flow_blocked_total,
     get_tracer,
 )
 from .runtime import apply_output_filters, validate_inputs
@@ -373,6 +374,10 @@ def d2_guard(
                                         authz_denied_reason_total.add(
                                             1, {"reason": "data_flow_violation", "mode": manager.mode}
                                         )
+                                        data_flow_blocked_total.add(1, {
+                                            "tool_id": effective_tool_id,
+                                            "blocking_label": ",".join(sorted(violated_facts)),
+                                        })
                                         user_violation_attempts_total.add(1, {
                                             "user_id": user_context.user_id if user_context else "unknown",
                                             "violation_type": "data_flow",
@@ -798,6 +803,10 @@ def d2_guard(
                                     authz_denied_reason_total.add(
                                         1, {"reason": "data_flow_violation", "mode": manager.mode}
                                     )
+                                    data_flow_blocked_total.add(1, {
+                                        "tool_id": effective_tool_id,
+                                        "blocking_label": ",".join(sorted(violated_facts)),
+                                    })
                                     user_violation_attempts_total.add(1, {
                                         "user_id": user_context.user_id if user_context else "unknown",
                                         "violation_type": "data_flow",
