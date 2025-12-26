@@ -263,3 +263,4 @@ class TestListenerConcurrentOperations:
             # Should exit much faster than the 10-second interval
             assert elapsed < 2, f"Shutdown took {elapsed}s - listener didn't wake from sleep"
 
+

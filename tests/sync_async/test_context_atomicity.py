@@ -411,3 +411,4 @@ class TestStressConditions:
             f"({100*fact_loss/expected_fact_count:.1f}% loss rate)"
         )
 
+

@@ -1,6 +1,6 @@
 [project]
 name = "d2-sdk"
-version = "1.2.0"
+version = "1.2.1"
 description = "The D2 Python SDK for RBAC on LLM Tools and other functionality"
 readme = "README.md"
 requires-python = ">=3.9"

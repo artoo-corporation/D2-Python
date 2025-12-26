@@ -473,3 +473,4 @@ class TestAsyncSyncIntegration:
             assert user_id == f"user_{thread_id}", \
                 f"Thread {thread_id} saw wrong user: {user_id}"
 
+

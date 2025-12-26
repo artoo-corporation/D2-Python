@@ -239,10 +239,12 @@ def d2_guard(
                         user_context = get_user_context()
 
                         if not is_allowed:
+                            user_roles = list(user_context.roles) if user_context and user_context.roles else []
                             error = PermissionDeniedError(
                                 tool_id=effective_tool_id,
                                 user_id=user_context.user_id if user_context else "unknown",
                                 roles=user_context.roles if user_context else [],
+                                reason=f"rbac_denied: role_missing (present roles: {user_roles})",
                             )
                             # Record a denied tool invocation outcome for observability
                             tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
@@ -264,7 +266,7 @@ def d2_guard(
                             return await _handle_permission_denied(validation_error)
 
                         # Layer 3: Sequence enforcement
-                        sequence_rules = await manager.get_sequence_rules()
+                        sequence_mode, sequence_rules = await manager.get_sequence_rules()
                         if sequence_rules:
                             sequence_start = time.perf_counter()
                             from .runtime.sequence import SequenceValidator
@@ -275,7 +277,8 @@ def d2_guard(
                             sequence_error = validator.validate_sequence(
                                 current_history=user_context.call_history if user_context else (),
                                 next_tool_id=effective_tool_id,
-                                sequence_rules=sequence_rules
+                                sequence_rules=sequence_rules,
+                                mode=sequence_mode
                             )
                             sequence_duration_ms = (time.perf_counter() - sequence_start) * 1000.0
                             guardrail_latency_ms.record(sequence_duration_ms, {
@@ -669,10 +672,12 @@ def d2_guard(
                     user_context = get_user_context()
 
                     if not is_allowed:
+                        user_roles = list(user_context.roles) if user_context and user_context.roles else []
                         error = PermissionDeniedError(
                             tool_id=effective_tool_id,
                             user_id=user_context.user_id if user_context else "unknown",
                             roles=user_context.roles if user_context else [],
+                            reason=f"rbac_denied: role_missing (present roles: {user_roles})",
                         )
                         # Record a denied tool invocation outcome for observability
                         tool_invocation_total.add(1, {"tool_id": effective_tool_id, "status": "denied"})
@@ -693,7 +698,7 @@ def d2_guard(
                         return await _handle_permission_denied(validation_error)
 
                     # Layer 3: Sequence enforcement
-                    sequence_rules = await manager.get_sequence_rules()
+                    sequence_mode, sequence_rules = await manager.get_sequence_rules()
                     if sequence_rules:
                         sequence_start = time.perf_counter()
                         from .runtime.sequence import SequenceValidator
@@ -704,7 +709,8 @@ def d2_guard(
                         sequence_error = validator.validate_sequence(
                             current_history=user_context.call_history if user_context else (),
                             next_tool_id=effective_tool_id,
-                            sequence_rules=sequence_rules
+                            sequence_rules=sequence_rules,
+                            mode=sequence_mode
                         )
                         sequence_duration_ms = (time.perf_counter() - sequence_start) * 1000.0
                         guardrail_latency_ms.record(sequence_duration_ms, {

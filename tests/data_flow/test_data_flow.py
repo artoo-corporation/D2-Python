@@ -14,7 +14,6 @@ egress channels after an initial path is blocked.
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-
 from d2.context import (
     UserContext,
     set_user,
@@ -26,7 +25,6 @@ from d2.context import (
     has_fact,
     has_any_fact,
 )
-
 
 class TestUserContextFacts:
     """Tests for facts field in UserContext."""
@@ -135,7 +133,6 @@ class TestUserContextFacts:
         clear_user_context()
         ctx = get_user_context()
         assert ctx.facts == frozenset()
-
 
 class TestPolicyBundleDataFlow:
     """Tests for data_flow parsing in PolicyBundle."""
@@ -274,7 +271,6 @@ class TestPolicyBundleDataFlow:
         assert bundle.get_labels_for_tool("database.read") == set()
         assert bundle.get_blocking_labels_for_tool("http.request") == set()
 
-
 class TestDataFlowEnforcement:
     """Tests for data_flow enforcement in the decorator."""
 
@@ -306,7 +302,7 @@ class TestDataFlowEnforcement:
         manager.check_async = AsyncMock(return_value=True)
         manager.is_tool_in_policy_async = AsyncMock(return_value=True)
         manager.get_tool_conditions = AsyncMock(return_value=None)
-        manager.get_sequence_rules = AsyncMock(return_value=[])
+        manager.get_sequence_rules = AsyncMock(return_value=(None, []))
         
         return manager
 
@@ -476,7 +472,6 @@ class TestDataFlowEnforcement:
         
         clear_user_context()
 
-
 class TestDataFlowTelemetry:
     """Tests for data_flow telemetry events."""
 
@@ -563,7 +558,7 @@ class TestDataFlowTelemetry:
         manager.check_async = AsyncMock(return_value=True)
         manager.is_tool_in_policy_async = AsyncMock(return_value=True)
         manager.get_tool_conditions = AsyncMock(return_value=None)
-        manager.get_sequence_rules = AsyncMock(return_value=[])
+        manager.get_sequence_rules = AsyncMock(return_value=(None, []))
         manager._usage_reporter = None
         
         set_user("agent-1", ["agent"])
@@ -620,7 +615,7 @@ class TestDataFlowTelemetry:
         manager.check_async = AsyncMock(return_value=True)
         manager.is_tool_in_policy_async = AsyncMock(return_value=True)
         manager.get_tool_conditions = AsyncMock(return_value=None)
-        manager.get_sequence_rules = AsyncMock(return_value=[])
+        manager.get_sequence_rules = AsyncMock(return_value=(None, []))
         
         # Mock UsageReporter
         mock_reporter = MagicMock()
@@ -673,7 +668,7 @@ class TestDataFlowTelemetry:
         manager.check_async = AsyncMock(return_value=True)
         manager.is_tool_in_policy_async = AsyncMock(return_value=True)
         manager.get_tool_conditions = AsyncMock(return_value=None)
-        manager.get_sequence_rules = AsyncMock(return_value=[])
+        manager.get_sequence_rules = AsyncMock(return_value=(None, []))
         
         # Mock UsageReporter
         mock_reporter = MagicMock()
@@ -707,4 +702,3 @@ class TestDataFlowTelemetry:
         assert event_data["result"] == "denied"
         assert "SENSITIVE" in event_data["violated_facts"]
         assert "SENSITIVE" in event_data["blocking_labels"]
-

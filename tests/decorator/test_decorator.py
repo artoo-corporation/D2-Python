@@ -46,7 +46,7 @@ class MockPolicyManagerAllowAll:  # pylint: disable=too-few-public-methods
     
     async def get_sequence_rules(self):  # noqa: D401
         """Return empty sequence rules (no restrictions)."""
-        return []
+        return None, []
     
     async def get_tool_conditions(self, _tool_id):  # noqa: D401
         """Return no conditions by default (no guardrails)."""

@@ -579,38 +579,52 @@ class PolicyManager:
 
         return applicable
 
-    async def get_sequence_rules(self) -> List[Dict[str, Any]]:
-        """Retrieve sequence rules for the current user's roles.
+    async def get_sequence_rules(self) -> tuple[Optional[str], List[Dict[str, Any]]]:
+        """Retrieve sequence rules and mode for the current user's roles.
         
         Returns:
-            List of sequence rule dictionaries (deny patterns with reasons)
+            Tuple of (mode, rules_list)
+            Mode is "deny" if any role uses deny mode, otherwise "allow" (or None if no rules).
             
         Example:
-            [
-                {"deny": ["database.read", "web.request"], "reason": "Exfiltration"},
-                {"deny": ["secrets.get", "web.request"], "reason": "Secret leak"}
-            ]
+            ("allow", [{"deny": ["database.read", "web.request"], "reason": "Exfiltration"}])
         """
         await self._init_complete.wait()
         bundle = self._get_bundle()
         user_context = get_user_context()
 
         if user_context is None or not user_context.roles:
-            return []
+            return None, []
 
         user_roles = set(user_context.roles)
         
         # Admin wildcard role bypasses sequence enforcement
         if "*" in user_roles:
-            return []
+            return None, []
 
-        # Collect all sequence rules for user's roles
+        # Collect all sequence rules and determine effective mode
         all_rules: List[Dict[str, Any]] = []
-        for role in user_roles:
-            role_rules = bundle.role_to_sequences.get(role, [])
-            all_rules.extend(role_rules)
+        effective_mode = "allow"
+        has_rules = False
 
-        return all_rules
+        for role in user_roles:
+            sequence_data = bundle.get_sequence_rules(role)
+            if sequence_data:
+                has_rules = True
+                role_mode = sequence_data.get("mode", "allow")
+                role_rules = sequence_data.get("rules", [])
+                
+                # If any role uses 'deny' mode (allowlist), the whole check 
+                # shifts to 'deny' mode for maximum security (least privilege).
+                if role_mode.lower() == "deny":
+                    effective_mode = "deny"
+                
+                all_rules.extend(role_rules)
+
+        if not has_rules:
+            return None, []
+
+        return effective_mode, all_rules
 
     async def is_tool_in_policy_async(self, tool_id: str) -> bool:
         """Async: Checks if a tool ID is defined in the policy at all."""

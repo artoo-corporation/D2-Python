@@ -79,7 +79,7 @@ class OrderTrackingPolicyManager:
     
     async def get_sequence_rules(self):
         self.call_order.append("get_sequence_rules")
-        return self.sequence_rules
+        return None, self.sequence_rules
 
 
 @pytest.mark.asyncio

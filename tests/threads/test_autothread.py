@@ -14,7 +14,7 @@ class _PM:  # minimal allow-all policy manager
     async def check_async(self, *_):
         return True
     async def get_sequence_rules(self):
-        return []
+        return None, []
     async def get_tool_conditions(self, *_):
         return None
     def _get_bundle(self):

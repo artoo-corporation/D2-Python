@@ -42,7 +42,7 @@ class _MockPolicyManager:
         return True
     
     async def get_sequence_rules(self):
-        return []
+        return None, []
     
     async def get_tool_conditions(self, *_):
         return None

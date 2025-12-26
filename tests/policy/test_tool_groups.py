@@ -41,7 +41,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should have 1 rule with @group references intact (lazy expansion)
         assert len(rules) == 1
@@ -72,7 +72,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should have 1 rule with @group references intact (lazy expansion)
         # Old behavior: 2 × 2 = 4 expanded rules
@@ -104,7 +104,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should keep @sensitive intact (lazy expansion)
         assert len(rules) == 1
@@ -136,7 +136,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should keep @groups intact (lazy expansion)
         assert len(rules) == 1
@@ -169,7 +169,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should have 2 rules with @public_data intact (lazy expansion)
         assert len(rules) == 2
@@ -244,7 +244,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Empty group: rule is kept (lazy expansion), but won't match anything at runtime
         assert len(rules) == 1
@@ -273,7 +273,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should remain exactly as specified (no expansion)
         assert len(rules) == 1
@@ -301,7 +301,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should keep @single intact (lazy expansion)
         assert len(rules) == 1
@@ -336,7 +336,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should have 2 rules with @groups intact (lazy expansion)
         assert len(rules) == 2
@@ -366,7 +366,7 @@ class TestToolGroupLazyExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should keep @sensitive intact (lazy expansion)
         assert len(rules) == 1
@@ -409,7 +409,7 @@ class TestToolGroupRuntime:
         from d2.runtime.sequence import SequenceValidator
         tool_groups = bundle.get_tool_groups()
         validator = SequenceValidator(tool_groups=tool_groups)
-        sequence_rules = bundle.get_sequence_rules("analyst")
+        sequence_rules = bundle.get_sequence_rules("analyst")["rules"]
         error = validator.validate_sequence(
             current_history=call_history,
             next_tool_id=next_tool,
@@ -455,7 +455,7 @@ class TestToolGroupRuntime:
         from d2.runtime.sequence import SequenceValidator
         tool_groups = bundle.get_tool_groups()
         validator = SequenceValidator(tool_groups=tool_groups)
-        sequence_rules = bundle.get_sequence_rules("analyst")
+        sequence_rules = bundle.get_sequence_rules("analyst")["rules"]
         
         error = validator.validate_sequence(
             current_history=["db.read_users"],
@@ -498,7 +498,7 @@ class TestToolGroupEdgeCases:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # "sensitive" without @ should be treated as tool name, not expanded
         assert len(rules) == 1
@@ -526,7 +526,7 @@ class TestToolGroupEdgeCases:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # "db@sensitive" should not be expanded (@ not at start)
         assert len(rules) == 1
@@ -558,7 +558,7 @@ class TestToolGroupEdgeCases:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Should have 2 rules with @groups intact (lazy expansion)
         # Overlaps are handled naturally at runtime
@@ -593,7 +593,7 @@ class TestToolGroupEdgeCases:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Old behavior: 50 × 50 = 2,500 rules in memory
         # New behavior: 1 rule with @groups (lazy expansion at runtime)
@@ -625,7 +625,7 @@ class TestToolGroupBackwardCompatibility:
         
         # Should not raise error
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         assert len(rules) == 1
         assert {"deny": ["db.read_users", "web.request"]} in rules
@@ -650,7 +650,7 @@ class TestToolGroupBackwardCompatibility:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         assert len(rules) == 1
 

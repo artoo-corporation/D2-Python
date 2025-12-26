@@ -43,7 +43,7 @@ class TestLazySequenceExpansion:
         bundle = PolicyBundle(bundle_data, mode="file")
         
         # Verify only 1 rule stored (not 10,000)
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         assert len(rules) == 1
         assert rules[0]["deny"] == ["@database", "@external"]
 
@@ -70,7 +70,7 @@ class TestLazySequenceExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("user")
+        rules = bundle.get_sequence_rules("user")["rules"]
         
         # Only 1 rule stored, not 8 million!
         assert len(rules) == 1
@@ -227,7 +227,7 @@ class TestLazySequenceExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("analyst")
+        rules = bundle.get_sequence_rules("analyst")["rules"]
         
         # Get tool_groups from bundle for validator
         tool_groups = bundle.get_tool_groups()
@@ -269,7 +269,7 @@ class TestLazySequenceExpansion:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("user")
+        rules = bundle.get_sequence_rules("user")["rules"]
         
         # Should have 3 rules (not expanded)
         assert len(rules) == 3
@@ -304,7 +304,7 @@ class TestBackwardsCompatibility:
         }
         
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("user")
+        rules = bundle.get_sequence_rules("user")["rules"]
         
         assert len(rules) == 1
         assert rules[0]["deny"] == ["db.read_users", "api.post"]
@@ -329,6 +329,6 @@ class TestBackwardsCompatibility:
         
         # Should not raise
         bundle = PolicyBundle(bundle_data, mode="file")
-        rules = bundle.get_sequence_rules("user")
+        rules = bundle.get_sequence_rules("user")["rules"]
         assert len(rules) == 1
 

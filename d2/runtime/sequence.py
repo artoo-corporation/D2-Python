@@ -127,7 +127,27 @@ class SequenceValidator:
                 continue
             
             # Check if the proposed sequence matches the pattern
-            if self._matches_pattern(proposed_sequence, pattern, effective_mode):
+            # Check for match
+            match = False
+            
+            if effective_mode == "deny" and is_allow:
+                # In deny mode, we need strict control to prevent arbitrary extensions.
+                # A sequence is allowed if:
+                # 1. It is a valid prefix of an allowed pattern (progressing step-by-step)
+                #    e.g. [A] matches start of [A, B]
+                if self._is_prefix_match(proposed_sequence, pattern):
+                    match = True
+                # 2. It completes an allowed pattern (allowing gaps/subsequences)
+                #    But it MUST end with the pattern's last element to prevent extension
+                #    e.g. [A, ... B] is allowed, but [A, B, ... C] is not
+                elif self._matches_pattern(proposed_sequence, pattern, effective_mode):
+                    if self._tool_matches_element(next_tool_id, pattern[-1]):
+                        match = True
+            else:
+                # In allow mode (or deny rules), use standard subsequence matching (supports gaps)
+                match = self._matches_pattern(proposed_sequence, pattern, effective_mode)
+
+            if match:
                 if is_allow:
                     # Allow rule matches
                     has_matching_allow = True
@@ -168,6 +188,19 @@ class SequenceValidator:
                 )
             
             return None
+            
+    def _is_prefix_match(self, sequence: list[str], pattern: list[str]) -> bool:
+        """Check if sequence is a valid prefix of the pattern (strict order, no gaps).
+        
+        Used in deny mode to allow partial progress through an allowed sequence.
+        """
+        if len(sequence) > len(pattern):
+            return False
+        
+        for i, tool in enumerate(sequence):
+            if not self._tool_matches_element(tool, pattern[i]):
+                return False
+        return True
 
     def _matches_pattern(
         self, 

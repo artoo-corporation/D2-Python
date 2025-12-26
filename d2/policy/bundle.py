@@ -29,7 +29,8 @@ class PolicyBundle:
     etag: Optional[str] = None  # For analytics and caching
     tool_to_roles: Dict[str, Set[str]] = field(default_factory=dict, repr=False)
     tool_conditions: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict, repr=False)
-    role_to_sequences: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict, repr=False)
+    # Map role -> SequenceRules object (holds rules list + mode)
+    role_to_sequences: Dict[str, Any] = field(default_factory=dict, repr=False)
     # Data flow tracking: which labels each tool produces
     tool_labels: Dict[str, Set[str]] = field(default_factory=dict, repr=False)
     # Data flow tracking: which labels block which tools
@@ -119,14 +120,31 @@ class PolicyBundle:
                         )
 
                 # Parse sequence rules (apply to this specific role)
-                sequence_rules = policy.get("sequence", [])
-                if sequence_rules:
-                    logger.debug("Processing %d sequence rules for role '%s'", len(sequence_rules), role)
+                sequence_raw = policy.get("sequence", [])
+                
+                # Handle both legacy list format and new nested format
+                if isinstance(sequence_raw, dict):
+                    # New format: {"mode": "deny", "rules": [...]}
+                    mode = sequence_raw.get("mode")
+                    rules_list = sequence_raw.get("rules", [])
+                else:
+                    # Legacy format: list of rules directly, default to allow mode
+                    mode = "allow"
+                    rules_list = sequence_raw if isinstance(sequence_raw, list) else []
+
+                # Store sequence rules if they exist OR if mode is "deny" (empty deny = block all)
+                if rules_list or (mode == "deny"):
+                    logger.debug("Processing %d sequence rules for role '%s' (mode=%s)", len(rules_list), role, mode)
                     # Validate @group references without expanding (lazy expansion at runtime)
                     tool_groups = self._extract_tool_groups(policy_content)
-                    validated_rules = self._validate_sequence_rules(sequence_rules, tool_groups)
-                    self.role_to_sequences[role] = validated_rules
-                    logger.debug("Validated %d sequence rules for role '%s' (lazy @group expansion)", len(validated_rules), role)
+                    validated_rules = self._validate_sequence_rules(rules_list, tool_groups)
+                    
+                    # Store as simple dict to avoid pickling issues with dataclasses
+                    self.role_to_sequences[role] = {
+                        "mode": mode,
+                        "rules": validated_rules
+                    }
+                    logger.debug("Validated %d sequence rules for role '%s'", len(validated_rules), role)
 
         logger.debug("Final tool_to_roles mapping: %s", dict(self.tool_to_roles))
         logger.debug("Final role_to_sequences mapping: %s", dict(self.role_to_sequences))
@@ -140,16 +158,17 @@ class PolicyBundle:
 
         return set(self.tool_to_roles.keys())
     
-    def get_sequence_rules(self, role: str) -> List[Dict[str, Any]]:
-        """Get sequence rules for a specific role.
+    def get_sequence_rules(self, role: str) -> Dict[str, Any]:
+        """Get sequence configuration for a specific role.
         
         Args:
             role: Role name
             
         Returns:
-            List of sequence rules (may contain @group references for lazy expansion)
+            Dict with 'mode' (str) and 'rules' (List[Dict]) keys.
+            Returns None if no sequence rules defined for role.
         """
-        return self.role_to_sequences.get(role, [])
+        return self.role_to_sequences.get(role)
     
     def get_tool_groups(self) -> Dict[str, List[str]]:
         """Get tool_groups from policy metadata for lazy sequence expansion.

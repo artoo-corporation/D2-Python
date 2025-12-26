@@ -4,7 +4,7 @@
 metadata:
   name: "sequence-modes-demo"
   description: "Demonstrates allow mode (blocklist) and deny mode (allowlist) for sequences"
-  expires: "2026-12-31T23:59:59+00:00"
+  expires: "2026-12-26T23:59:59+00:00"
   
   # Define tool groups for use in sequence rules
   tool_groups:
@@ -302,6 +302,7 @@ policies:
 # - Harder to maintain (must update allow list for new workflows)
 #
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 
 

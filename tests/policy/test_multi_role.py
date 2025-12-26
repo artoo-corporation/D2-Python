@@ -147,8 +147,8 @@ def test_multi_role_with_sequence_rules():
     assert "analyst" in bundle.role_to_sequences
     assert "data_engineer" in bundle.role_to_sequences
     
-    analyst_rules = bundle.role_to_sequences["analyst"]
-    engineer_rules = bundle.role_to_sequences["data_engineer"]
+    analyst_rules = bundle.role_to_sequences["analyst"]["rules"]
+    engineer_rules = bundle.role_to_sequences["data_engineer"]["rules"]
     
     assert analyst_rules == engineer_rules
     assert len(analyst_rules) == 1

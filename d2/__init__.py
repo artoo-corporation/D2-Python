@@ -5,12 +5,12 @@
 """
 Artoo SDK: A client-side library for enforcing RBAC on LLM tools.
 
-Public API is stable as of 1.2.0. Backward-incompatible changes will only occur
+Public API is stable as of 1.2.1. Backward-incompatible changes will only occur
 in a new major version. Deprecated symbols (if any) will be retained for at least
 one minor version and warned via release notes before removal.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 # Export the simple setter alongside the context-manager variant
 from .context import (
