@@ -815,21 +815,115 @@ await send_email("user@example.com", data)  # Tool: email.send
 
 **Runtime performance:** O(1) set membership check per tool (fast regardless of group size)
 
-### Try it
+### Sequence modes: allow vs deny (version 1.2+)
 
-Run the demo to see it in action:
+By default, sequence enforcement uses **allow mode** (blocklist approach): everything is permitted unless explicitly denied. For high-security scenarios, you can switch to **deny mode** (allowlist approach): everything is blocked unless explicitly allowed.
 
-```bash
-python examples/sequence_demo.py
+**When to use each mode:**
+
+| Mode | Default behavior | Best for |
+|------|------------------|----------|
+| `allow` (blocklist) | Everything permitted, deny specific patterns | Trusted users, dynamic workflows, velocity over control |
+| `deny` (allowlist) | Everything blocked, allow specific patterns | Contractors, AI agents, regulated industries (HIPAA, SOC2) |
+
+**Allow mode example** (default - blocklist):
+
+```yaml
+policies:
+  - role: senior_engineer
+    permissions: ["*"]
+    
+    sequence:
+      mode: allow  # Default: permit everything except explicit deny rules
+      
+      rules:
+        - deny: ["@sensitive_data", "@external_io"]
+          reason: "Prevent data exfiltration"
+        
+        # Everything else is implicitly allowed
 ```
 
-It shows 5 scenarios:
+**Deny mode example** (allowlist / zero-trust):
 
+```yaml
+policies:
+  - role: ai_agent
+    permissions:
+      - web.search
+      - llm.summarize
+      - report.save
+    
+    sequence:
+      mode: deny  # Zero-trust: only allow pre-approved workflows
+      
+      rules:
+        - allow: ["web.search", "llm.summarize"]
+          reason: "Agent can search and summarize"
+        
+        - allow: ["llm.summarize", "report.save"]
+          reason: "Agent can save summaries"
+        
+        # Everything else is implicitly blocked
+        # Even though the agent has permission for all 3 tools,
+        # web.search -> report.save is blocked (not in allow list)
+```
+
+**How deny mode works:**
+
+In deny mode, D2 requires that each tool call matches an allowed pattern:
+
+```python
+set_user("agent-1", roles=["ai_agent"])
+
+# Call 1: web.search
+await search("AI safety")
+# ✓ Matches start of [web.search, llm.summarize]
+
+# Call 2: llm.summarize  
+summary = await summarize(results)
+# ✓ Completes [web.search, llm.summarize]
+
+# Call 3: report.save
+await save_report(summary)
+# ✓ Matches [llm.summarize, report.save] (chained from call 2)
+
+# But this would fail:
+set_user("agent-2", roles=["ai_agent"])
+await search("secrets")
+await save_report(results)  # ✗ BLOCKED - [web.search, report.save] not in allow list
+```
+
+**Chaining rules:** In deny mode, 2-step allow rules can be chained into longer workflows. `[A, B]` + `[B, C]` allows the sequence `A → B → C` because each step matches a valid pattern.
+
+**Mode interaction with deny rules:**
+
+- In `allow` mode: `allow` rules override `deny` rules (explicit permission wins)
+- In `deny` mode: `deny` rules are ignored (everything is already denied by default)
+
+### Try it
+
+Run the demos to see sequence enforcement in action:
+
+```bash
+# Basic sequence enforcement (deny rules in allow mode)
+python examples/sequence_demo.py
+
+# Sequence modes comparison (allow vs deny)
+python examples/sequence_modes_demo.py
+```
+
+**sequence_demo.py** shows 5 scenarios:
 1. Direct leak (blocked)
 2. Safe internal workflow (allowed)
 3. Hiding the trail (blocked)
 4. Secrets leak (blocked)
 5. Admin bypass (allowed)
+
+**sequence_modes_demo.py** shows:
+1. Allow mode (blocklist) - trusted users with specific deny rules
+2. Deny mode (allowlist) - restricted users with explicit allow rules
+3. Regulated industry patterns (HIPAA, SOC2)
+4. AI agent zero-trust workflows
 
 For complete protection, combine RBAC, sequence enforcement, data flow tracking, and input/output guardrails. See the Trail of Bits research linked above for more attack patterns.
 

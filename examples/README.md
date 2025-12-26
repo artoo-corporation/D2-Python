@@ -84,7 +84,36 @@ python examples/sequence_demo.py
 
 ---
 
-### 4. data_flow_demo.py (NEW - v1.2+)
+### 4. sequence_modes_demo.py
+
+**Demonstrates:** Sequence enforcement modes - allow (blocklist) vs deny (allowlist).
+
+**Features shown:**
+- **Allow mode (blocklist):** Default behavior, deny specific patterns, allow everything else
+- **Deny mode (allowlist):** Zero-trust, only allow explicit patterns, deny everything else
+- **Rule chaining:** How 2-step allow rules compose into longer workflows
+- **Mode selection:** When to use each mode based on security requirements
+
+**Use cases:**
+- Trusted users (admins, senior engineers) - use allow mode with deny rules
+- Restricted users (contractors, interns, AI agents) - use deny mode with allow rules
+- Regulated industries (HIPAA, SOC2, PCI-DSS) - use deny mode for compliance
+- Service accounts - use deny mode for predictable, auditable workflows
+
+**Run:**
+```bash
+python examples/sequence_modes_demo.py
+```
+
+**Policy:** `sequence_modes_policy.yaml`
+
+**Key concept:**
+- `mode: allow` = "permit everything except these deny rules" (blocklist)
+- `mode: deny` = "deny everything except these allow rules" (allowlist/zero-trust)
+
+---
+
+### 5. data_flow_demo.py
 
 **Demonstrates:** Semantic data flow tracking with facts (labels) that block egress tools.
 
@@ -113,7 +142,7 @@ python examples/data_flow_demo.py
 
 ---
 
-### 5. defense_in_depth_demo.py
+### 6. defense_in_depth_demo.py
 
 **Demonstrates:** Complete security stack (RBAC + Sequence + Data Flow + Guardrails).
 
@@ -132,7 +161,7 @@ python examples/defense_in_depth_demo.py
 
 ---
 
-### 7. multi_role_demo.py
+### 8. multi_role_demo.py
 
 **Demonstrates:** Multi-role policies for reduced duplication.
 
@@ -150,7 +179,7 @@ python examples/multi_role_demo.py
 
 ---
 
-### 8. local_mode_demo.py
+### 9. local_mode_demo.py
 
 **Demonstrates:** Basic RBAC with local file mode.
 
@@ -220,6 +249,9 @@ python examples/guardrails_demo.py
 
 # See sequence enforcement + tool groups
 python examples/sequence_demo.py
+
+# See sequence modes (allow vs deny)
+python examples/sequence_modes_demo.py
 ```
 
 ---
@@ -231,6 +263,7 @@ python examples/sequence_demo.py
 | `data_flow_policy.yaml` | data_flow_demo.py | Fact labeling, blanket blocking, pivot prevention |
 | `guardrails_policy.yaml` | guardrails_demo.py | Input validation, output sanitization, pattern redaction |
 | `sequence_demo_policy.yaml` | sequence_demo.py | Tool groups (@sensitive_data, @external_io), lazy expansion |
+| `sequence_modes_policy.yaml` | sequence_modes_demo.py | Allow mode (blocklist) vs deny mode (allowlist), zero-trust patterns |
 | `defense_in_depth_policy.json` | defense_in_depth_demo.py | All layers combined (RBAC + Sequence + Data Flow + Guardrails) |
 | `multi_role_policy.yaml` | multi_role_demo.py | Multi-role syntax |
 | `local_mode_demo_policy.yaml` | local_mode_demo.py | Basic RBAC |
@@ -242,9 +275,10 @@ python examples/sequence_demo.py
 1. **Start with `local_mode_demo.py`** - Understand basic RBAC
 2. **Then `guardrails_demo.py`** - Learn input/output guardrails
 3. **Then `sequence_demo.py`** - See temporal authorization
-4. **Then `data_flow_demo.py`** - Understand semantic data tracking
-5. **Then `policy_validation_demo.py`** - Understand policy validation
-6. **Finally `defense_in_depth_demo.py`** - See everything together
+4. **Then `sequence_modes_demo.py`** - Understand allow vs deny modes
+5. **Then `data_flow_demo.py`** - Understand semantic data tracking
+6. **Then `policy_validation_demo.py`** - Understand policy validation
+7. **Finally `defense_in_depth_demo.py`** - See everything together
 
 ---
 
