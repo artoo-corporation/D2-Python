@@ -337,6 +337,7 @@ def d2_guard(
                                                 "reason": "sequence_violation",
                                                 "mode": manager.mode,
                                                 # Sequence-specific context for analysis
+                                                "sequence_mode": sequence_mode,
                                                 "pattern_type": pattern_type,
                                                 "source_tool": source_tool,
                                                 "chain_length": chain_length,
@@ -769,6 +770,7 @@ def d2_guard(
                                             "reason": "sequence_violation",
                                             "mode": manager.mode,
                                             # Sequence-specific context for analysis
+                                            "sequence_mode": sequence_mode or "unknown",  # "allow" (blocklist) or "deny" (allowlist)
                                             "pattern_type": pattern_type,
                                             "source_tool": source_tool,
                                             "chain_length": chain_length,
