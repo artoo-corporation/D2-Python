@@ -108,6 +108,7 @@ class PolicyManager:
     async def initialize(self):
         """Loads the initial policy and starts background updates."""
         self._init_task = asyncio.create_task(self._initialize_internal())
+        await self._init_task
 
     async def _initialize_internal(self):
         # Capture the main event loop for cross-thread scheduling

@@ -231,7 +231,10 @@ class PollingListener(Listener):
                         # ------------------------------------------------------------------
                         self._maybe_update_interval(response.headers.get("X-D2-Poll-Seconds"))
 
-                        await self._update_callback()
+                        # Handle both sync and async callbacks
+                        result = self._update_callback()
+                        if asyncio.iscoroutine(result):
+                            await result
                         backoff_multiplier = 1 # Reset backoff on success
                         self._consecutive_failures = 0
                         self._stale_logged = False

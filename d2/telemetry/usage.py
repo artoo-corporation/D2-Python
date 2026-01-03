@@ -318,7 +318,7 @@ class UsageReporter:
                             except Exception as e:
                                 logger.error("Failed to send split payload: %s", e)
                         continue
-                    await response.raise_for_status()
+                    response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 logger.error("Failed to send usage data to D2 cloud: %s", e)
             except Exception:
